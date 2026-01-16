@@ -1,0 +1,6 @@
+config MODULES_SENSOR_CAN_PUBLISHER
+	bool "Sensor CAN Publisher"
+	default y
+	help
+	  Este módulo publica dados de sensores locais (IMU, GPS)
+	  no barramento DroneCAN para fins de redundância.
