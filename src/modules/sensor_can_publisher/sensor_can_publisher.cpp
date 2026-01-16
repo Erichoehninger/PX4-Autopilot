@@ -1,12 +1,21 @@
 /****************************************************************************
  *
- *   CAN Publisher – módulo de teste
+ *   uORB self test: publish + subscribe
  *
  ****************************************************************************/
 
 #include <px4_platform_common/log.h>
 #include <px4_platform_common/module.h>
-#include <px4_platform_common/getopt.h>
+
+#include <uORB/Publication.hpp>
+#include <uORB/Subscription.hpp>
+
+#include <uORB/topics/debug_key_value.h>
+
+#include <drivers/drv_hrt.h>
+
+#include <unistd.h>
+#include <string.h>
 
 extern "C" __EXPORT int sensor_can_publisher_main(int argc, char *argv[]);
 
@@ -24,7 +33,41 @@ int sensor_can_publisher_main(int argc, char *argv[])
 	}
 
 	if (!strcmp(argv[1], "start")) {
-		PX4_INFO("ola, sou o CAN_PUBLISHER e existo");
+
+		PX4_INFO("uORB self-test iniciado");
+
+		/************ PUBLICADOR ************/
+		uORB::Publication<debug_key_value_s> pub{ORB_ID(debug_key_value)};
+
+		/************ SUBSCRIBER ************/
+		uORB::Subscription sub{ORB_ID(debug_key_value)};
+
+		debug_key_value_s msg{};
+		strncpy(msg.key, "teste", sizeof(msg.key));
+
+		for (int i = 0; i < 20; i++) {
+
+			/************ PUBLICA ************/
+			msg.timestamp = hrt_absolute_time();
+			msg.value = (float)i;
+
+			pub.publish(msg);
+
+			usleep(10000); // 10 ms
+
+			/************ ESCUTA ************/
+			if (sub.updated()) {
+
+				debug_key_value_s rx{};
+				sub.copy(&rx);
+
+				PX4_INFO("RECEBIDO: key=%s value=%.2f",
+					rx.key,
+					(double)rx.value);
+			}
+		}
+
+		PX4_INFO("uORB self-test finalizado");
 		return 0;
 	}
 
