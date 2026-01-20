@@ -6,6 +6,9 @@
 
 #include <px4_platform_common/log.h>
 #include <px4_platform_common/module.h>
+#include <px4_platform_common/getopt.h>
+#include <px4_platform_common/posix.h>
+#include <parameters/param.h>
 
 #include <uORB/Subscription.hpp>
 #include <uORB/topics/estimator_status.h>
@@ -20,6 +23,7 @@
 #include <arpa/inet.h>
 
 struct EkfScore {
+	int32_t instance_id;
 	float vel;
 	float pos;
 	float hgt;
@@ -27,6 +31,7 @@ struct EkfScore {
 	uint16_t flags;
 	uint64_t timestamp;
 };
+
 
 extern "C" __EXPORT int sensor_can_publisher_main(int argc, char *argv[]);
 
@@ -76,7 +81,10 @@ int sensor_can_publisher_main(int argc, char *argv[])
 			score.hdg = status.hdg_test_ratio;
 			score.flags = status.solution_status_flags;
 			score.timestamp = status.timestamp;
-
+			int32_t instance_id = -1;
+			param_t px4_comm_id =param_find("PX4_COMM_ID");
+			param_get(px4_comm_id,&instance_id);
+			score.instance_id = instance_id;
 			/* ---------- SEND VIA UDP ---------- */
 
 			ssize_t sent = sendto(
@@ -93,15 +101,19 @@ int sensor_can_publisher_main(int argc, char *argv[])
 			}
 
 			/* --------------------------------- */
-
-			PX4_INFO(
-				"EKF test ratios | vel=%.2f pos=%.2f hgt=%.2f hdg=%.2f | ts=%llu",
-				(double)score.vel,
-				(double)score.pos,
-				(double)score.hgt,
-				(double)score.hdg,
+			PX4_INFO("id %ld | ts=%llu",
+				(long)score.instance_id,
 				(unsigned long long)score.timestamp
 			);
+
+			//PX4_INFO(
+			//	"EKF test ratios | vel=%.2f pos=%.2f hgt=%.2f hdg=%.2f | ts=%llu",
+			//	(double)score.vel,
+			//	(double)score.pos,
+			//	(double)score.hgt,
+			//	(double)score.hdg,
+			//	(unsigned long long)score.timestamp
+			//);
 
 			count++;
 			if (max_tests >= 0 && count >= max_tests) {
