@@ -42,9 +42,11 @@ extern std::mutex peers_mutex;
 
 inline bool is_valid_peer(const EkfScore &s, uint64_t now)
 {
-	if (now - s.timestamp_utc > 5'000'000) {
-		return false;
-	}
+	// por enquanto não temos critérios para validar um peer.
+
+	//if (now - s.timestamp_utc > 5'000'000) {
+	//	return false;
+	//}
 
 	// filtros opcionais
 	// if (!(s.ekf_flags & estimator_status_s::ESTIMATOR_STATUS_FLAGS_VALID_POS)) return false;
