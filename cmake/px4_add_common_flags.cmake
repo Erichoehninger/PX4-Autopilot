@@ -162,7 +162,7 @@ function(px4_add_common_flags)
 		-Wno-overloaded-virtual # TODO: fix and remove
 	)
 
-	if((NOT BUILD_TESTING) AND (NOT PX4_CONFIG MATCHES "px4_sitl"))
+	if((NOT BUILD_TESTING) AND (NOT PX4_CONFIG MATCHES "px4_sitl") AND (NOT PX4_CONFIG MATCHES "GD_sitl"))
 		list(APPEND cxx_flags
 			-fno-rtti
 		)

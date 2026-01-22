@@ -13,159 +13,20 @@
 #include <uORB/topics/estimator_status.h>
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/vehicle_local_position.h>
+#include <uORB/topics/sensor_gps.h>
+
 
 #include <unistd.h>
 #include <cstring>
 #include <cstdlib>
-#include <cmath>
+#include <thread>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#include <map>
-#include <mutex>
-#include <thread>
-
-/* ======================== PAYLOAD ======================== */
-
-struct EkfScore {
-	int32_t instance_id;
-
-	float vel_test;
-	float pos_test;
-	float hgt_test;
-	float hdg_test;
-
-	float pos_var;
-	float vel_var;
-
-	uint16_t ekf_flags;
-	uint8_t nav_state;
-
-	uint64_t timestamp;
-};
-
-/* ======================== PEERS ========================== */
-
-struct PeerState {
-	EkfScore score;
-	uint64_t last_rx;
-};
-
-static std::map<int32_t, PeerState> peers;
-static std::mutex peers_mutex;
-
-/* ======================== UTILS ========================== */
-
-static bool is_valid_peer(const EkfScore &s, uint64_t now)
-{
-	if (now - s.timestamp > 5000000) {
-		return false;
-	}
-
-	//if (!(s.ekf_flags & estimator_status_s::ESTIMATOR_STATUS_FLAGS_VALID_POS)) {
-	//	return false;
-	//}
-	//if (s.nav_state != vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION) {
-	//	return false;
-	//}
-
-	return true;
-}
-
-static float compute_score(const EkfScore &s)
-{
-	return s.instance_id; //teste, a instancia com maior ID deve ser eleita o lider
-		//1.0f * s.vel_test +
-		//1.0f * s.pos_test +
-		//0.5f * s.hgt_test +
-		//0.5f * s.hdg_test +
-		//0.2f * s.pos_var +
-		//0.2f * s.vel_var;
-}
-
-static int32_t elect_leader(const EkfScore &self)
-{
-	uint64_t now = hrt_absolute_time();
-
-	float best_score = compute_score(self); //localmente começamos assumindo que nosso score é o melhor
-	int32_t best_id = self.instance_id;
-
-	std::lock_guard<std::mutex> lock(peers_mutex); //mutex para proteger o acesso concorrente ao mapa de peers
-
-	//Isso aqui pode ser melhorado pra fazer mais rápido/sem loop talvez
-	for (const auto &[id, peer] : peers) {
-
-		if (id == self.instance_id) {
-			continue;
-		}
-
-		if (!is_valid_peer(peer.score, now)) {
-		//	continue;
-		}
-		PX4_INFO(
-			"PEER id=%ld score=%.3f",
-			(long)id,
-			(double)compute_score(peer.score)
-		);
-
-
-		float s = compute_score(peer.score);
-
-		if (s > best_score ||
-		    (fabsf(s - best_score) < 1e-4f && id < best_id)) {
-			best_score = s;
-			best_id = id;
-		}
-	}
-
-	return best_id;
-}
-
-/* ======================== RX THREAD ====================== */
-
-static void udp_rx_thread()
-{
-	int sock = socket(AF_INET, SOCK_DGRAM, 0);
-	param_t p_comm_id = param_find("PX4_COMM_ID");
-	int32_t my_id = -1;
-	param_get(p_comm_id, &my_id);
-	sockaddr_in addr{};
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons(14560 + my_id); //escuta porta 14560+PX_COMM_ID
-	addr.sin_addr.s_addr = INADDR_ANY;
-
-	bind(sock, (sockaddr *)&addr, sizeof(addr));
-	PX4_INFO("UDP RX LISTENING ON PORT %d", 14560 + my_id);
-	PX4_INFO("UDP RX thread active");
-
-	while (true) {
-
-		EkfScore rx{};
-		ssize_t n = recv(sock, &rx, sizeof(rx), 0);
-
-		if (n != sizeof(rx)) {
-			continue;
-		}
-
-		uint64_t now = hrt_absolute_time();
-
-		{
-			std::lock_guard<std::mutex> lock(peers_mutex);
-
-			PeerState &peer = peers[rx.instance_id];
-			peer.score = rx;
-			peer.last_rx = now;
-		}
-
-		PX4_DEBUG(
-			"RX id=%ld ts=%llu",
-			(long)rx.instance_id,
-			(unsigned long long)rx.timestamp
-		);
-	}
-}
+#include "sensor_can_utils.h"
+#include "sensor_can_rx.h"
 
 /* ======================== MAIN =========================== */
 
@@ -185,10 +46,13 @@ int sensor_can_publisher_main(int argc, char *argv[])
 	uORB::Subscription est_sub{ORB_ID(estimator_status)};
 	uORB::Subscription veh_sub{ORB_ID(vehicle_status)};
 	uORB::Subscription lpos_sub{ORB_ID(vehicle_local_position)};
+	uORB::Subscription gps_sub{ORB_ID(sensor_gps)};
+
 
 	estimator_status_s est{};
 	vehicle_status_s veh{};
 	vehicle_local_position_s lpos{};
+	sensor_gps_s gps{};
 
 	/* ----------- PARAM ----------- */
 
@@ -204,7 +68,6 @@ int sensor_can_publisher_main(int argc, char *argv[])
 
 	sockaddr_in dest{};
 	dest.sin_family = AF_INET;
-	dest.sin_port = htons(14560);
 	dest.sin_addr.s_addr = inet_addr("127.0.0.1");
 
 	/* ----------- RX THREAD ----------- */
@@ -232,6 +95,10 @@ int sensor_can_publisher_main(int argc, char *argv[])
 			lpos_sub.copy(&lpos);
 		}
 
+		if (gps_sub.updated()) {
+			gps_sub.copy(&gps);
+		}
+
 		EkfScore self{};
 
 		self.instance_id = my_id;
@@ -246,28 +113,27 @@ int sensor_can_publisher_main(int argc, char *argv[])
 
 		self.ekf_flags = est.solution_status_flags;
 		self.nav_state = veh.nav_state;
-		self.timestamp = est.timestamp;
+		self.timestamp_utc = gps.time_utc_usec;
 
-		for(int i=0; i<3; i++) {
-
-		dest.sin_port = htons(14560+i); //envia para portas 14560+0,1,2 (simulando CAN)
-		sendto(
-			tx_sock,
-			&self,
-			sizeof(self),
-			0,
-			(sockaddr *)&dest,
-			sizeof(dest)
-		);
+		for (int i = 0; i < 3; i++) {
+			dest.sin_port = htons(14560 + i);
+			sendto(
+				tx_sock,
+				&self,
+				sizeof(self),
+				0,
+				(sockaddr *)&dest,
+				sizeof(dest)
+			);
 		}
 
 		int32_t leader = elect_leader(self);
-		//elect_leader(self);
-		PX4_INFO(
-			"EU=%ld | LIDER=%ld",
-			(long)self.instance_id,
-			(long)leader
 
+		PX4_INFO(
+			"\nEU=%ld | LIDER=%ld | timestamp_utc=%llu\n",
+			(long)self.instance_id,
+			(long)leader,
+			(unsigned long long)self.timestamp_utc
 		);
 
 		count++;
