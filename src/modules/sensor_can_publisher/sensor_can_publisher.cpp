@@ -89,11 +89,12 @@ static int32_t elect_leader(const EkfScore &self)
 {
 	uint64_t now = hrt_absolute_time();
 
-	float best_score = compute_score(self);
+	float best_score = compute_score(self); //localmente começamos assumindo que nosso score é o melhor
 	int32_t best_id = self.instance_id;
 
-	std::lock_guard<std::mutex> lock(peers_mutex);
+	std::lock_guard<std::mutex> lock(peers_mutex); //mutex para proteger o acesso concorrente ao mapa de peers
 
+	//Isso aqui pode ser melhorado pra fazer mais rápido/sem loop talvez
 	for (const auto &[id, peer] : peers) {
 
 		if (id == self.instance_id) {
@@ -101,12 +102,18 @@ static int32_t elect_leader(const EkfScore &self)
 		}
 
 		if (!is_valid_peer(peer.score, now)) {
-			continue;
+		//	continue;
 		}
+		PX4_INFO(
+			"PEER id=%ld score=%.3f",
+			(long)id,
+			(double)compute_score(peer.score)
+		);
+
 
 		float s = compute_score(peer.score);
 
-		if (s < best_score ||
+		if (s > best_score ||
 		    (fabsf(s - best_score) < 1e-4f && id < best_id)) {
 			best_score = s;
 			best_id = id;
@@ -134,6 +141,7 @@ static void udp_rx_thread()
 	PX4_INFO("UDP RX thread active");
 
 	while (true) {
+
 		EkfScore rx{};
 		ssize_t n = recv(sock, &rx, sizeof(rx), 0);
 
@@ -141,15 +149,20 @@ static void udp_rx_thread()
 			continue;
 		}
 
-		std::lock_guard<std::mutex> lock(peers_mutex);
+		uint64_t now = hrt_absolute_time();
 
-		peers[rx.instance_id] = {
-			.score = rx,
-			.last_rx = hrt_absolute_time()
-		};
-	PX4_INFO(
-			"[RX from ID] %ld",
-			(long)rx.instance_id
+		{
+			std::lock_guard<std::mutex> lock(peers_mutex);
+
+			PeerState &peer = peers[rx.instance_id];
+			peer.score = rx;
+			peer.last_rx = now;
+		}
+
+		PX4_DEBUG(
+			"RX id=%ld ts=%llu",
+			(long)rx.instance_id,
+			(unsigned long long)rx.timestamp
 		);
 	}
 }
@@ -248,14 +261,14 @@ int sensor_can_publisher_main(int argc, char *argv[])
 		);
 		}
 
-		//int32_t leader = elect_leader(self);
-		elect_leader(self);
-		//PX4_INFO(
-		//	"EU=%ld | LIDER=%ld | score=%.3f",
-		//	(long)self.instance_id,
-		//	(long)leader,
-		//	(double)compute_score(self)
-		//);
+		int32_t leader = elect_leader(self);
+		//elect_leader(self);
+		PX4_INFO(
+			"EU=%ld | LIDER=%ld",
+			(long)self.instance_id,
+			(long)leader
+
+		);
 
 		count++;
 		if (max_iter >= 0 && count >= max_iter) {
