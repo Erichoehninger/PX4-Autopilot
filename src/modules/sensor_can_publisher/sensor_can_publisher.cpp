@@ -7,7 +7,9 @@
 #include <px4_platform_common/log.h>
 #include <px4_platform_common/module.h>
 #include <px4_platform_common/posix.h>
+#include <px4_platform_common/time.h>
 #include <parameters/param.h>
+#include <drivers/drv_hrt.h>
 
 #include <uORB/Subscription.hpp>
 #include <uORB/topics/estimator_status.h>
@@ -20,6 +22,9 @@
 #include <cstring>
 #include <cstdlib>
 #include <thread>
+#include <inttypes.h>
+#include <time.h>
+
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -77,7 +82,7 @@ int sensor_can_publisher_main(int argc, char *argv[])
 	PX4_INFO("sensor_can_publisher running");
 
 	int count = 0;
-
+	timespec ts{};
 	while (true) {
 
 		if (!est_sub.updated()) {
@@ -99,6 +104,12 @@ int sensor_can_publisher_main(int argc, char *argv[])
 			gps_sub.copy(&gps);
 		}
 
+		px4_clock_gettime(CLOCK_REALTIME, &ts);
+
+		uint64_t tempo_real_us =
+			uint64_t(ts.tv_sec) * 1000000ULL +
+			uint64_t(ts.tv_nsec) / 1000ULL;
+		//uint64_t tempo_real_us = hrt_absolute_time() + hrt_absolute_time_offset();
 		EkfScore self{};
 
 		self.instance_id = my_id;
@@ -113,7 +124,8 @@ int sensor_can_publisher_main(int argc, char *argv[])
 
 		self.ekf_flags = est.solution_status_flags;
 		self.nav_state = veh.nav_state;
-		self.timestamp_utc = gps.time_utc_usec;
+		//Fora de hardware, usar libs do sistema
+		self.timestamp_utc = tempo_real_us;//gps.time_utc_usec;
 
 		for (int i = 0; i < 3; i++) {
 			dest.sin_port = htons(14560 + i);
@@ -134,6 +146,25 @@ int sensor_can_publisher_main(int argc, char *argv[])
 			(long)self.instance_id,
 			(long)leader,
 			(unsigned long long)self.timestamp_utc
+		);
+
+
+		time_t sec = tempo_real_us / 1000000ULL;
+		uint64_t us = tempo_real_us % 1000000ULL;
+
+		struct tm tm_utc;
+		gmtime_r(&sec, &tm_utc);
+
+		uint64_t ms = us / 1000ULL;
+		uint64_t rem_us = us % 1000ULL;
+
+		PX4_INFO(
+		"Hora UTC: %02d:%02d:%02d:%03" PRIu64 ":%03" PRIu64,
+		tm_utc.tm_hour,
+		tm_utc.tm_min,
+		tm_utc.tm_sec,
+		ms,
+		rem_us
 		);
 
 		count++;

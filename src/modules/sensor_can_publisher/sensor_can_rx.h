@@ -14,6 +14,8 @@
 inline std::map<int32_t, PeerState> peers;
 inline std::mutex peers_mutex;
 
+
+
 /* ======================== RX THREAD ====================== */
 
 inline void udp_rx_thread()
@@ -67,19 +69,37 @@ inline void udp_rx_thread()
         }
 
         if (n == sizeof(rx)) {
-            uint64_t now = hrt_absolute_time();
-            std::lock_guard<std::mutex> lock(peers_mutex);
-            PeerState &peer = peers[rx.instance_id];
-            peer.score = rx;
-            peer.last_rx = now;
+		timespec ts{};
+		px4_clock_gettime(CLOCK_REALTIME, &ts);
+		uint64_t now =
+				uint64_t(ts.tv_sec) * 1000000ULL +
+				uint64_t(ts.tv_nsec) / 1000ULL;
 
-            PX4_INFO("Received from ID: %ld| timestamp_utc=%llu",
-		     (long)rx.instance_id,
-		     (unsigned long long)rx.timestamp_utc
-	    );
-        }
+		std::lock_guard<std::mutex> lock(peers_mutex);
+		PeerState &peer = peers[rx.instance_id];
+
+		peer.score = rx;
+		peer.last_rx = now;
+
+		if (rx.timestamp_utc > 0 && now > rx.timestamp_utc) {
+			uint64_t latency_us = now - rx.timestamp_utc;
+			peer.latency.update(latency_us);
+		}
+
+		PX4_INFO(
+			"Received from ID: %ld | latency=%" PRIu64 " us",
+			(long)rx.instance_id,
+			(now > rx.timestamp_utc) ? (now - rx.timestamp_utc) : 0
+		);
+	}
     }
+    	{
+		std::lock_guard<std::mutex> lock(peers_mutex);
 
+		for (auto &it : peers) {
+			it.second.latency.print(it.first);
+		}
+	}
     PX4_INFO("Closing socket on port %d", 14560 + my_id);
     close(sock);
 }

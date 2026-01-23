@@ -5,6 +5,7 @@
 #include <uORB/topics/vehicle_status.h>
 
 
+
 #include <map>
 #include <mutex>
 #include <cmath>
@@ -29,11 +30,50 @@ struct EkfScore {
 
 
 /* ======================== PEERS ========================== */
+struct LatencyStats {
+	uint64_t min_us{UINT64_MAX};
+	uint64_t max_us{0};
+	uint64_t sum_us{0};
+	uint32_t samples{0};
 
+	void update(uint64_t latency_us)
+	{
+		if (latency_us < min_us) {
+			min_us = latency_us;
+		}
+
+		if (latency_us > max_us) {
+			max_us = latency_us;
+		}
+
+		sum_us += latency_us;
+		samples++;
+	}
+
+	void print(int32_t peer_id) const
+	{
+		if (samples == 0) {
+			PX4_INFO("Peer %ld: no latency samples collected", (long)peer_id);
+			return;
+		}
+
+		PX4_INFO(
+			"Peer %ld latency [us] | min=%" PRIu64 " avg=%" PRIu64 " max=%" PRIu64 " samples=%lu",
+			(long)peer_id,
+			min_us,
+			sum_us / samples,
+			max_us,
+			(unsigned long)samples
+		);
+	}
+};
 struct PeerState {
 	EkfScore score;
 	uint64_t last_rx;
+	LatencyStats latency;
 };
+
+
 
 extern std::map<int32_t, PeerState> peers;
 extern std::mutex peers_mutex;
@@ -42,11 +82,14 @@ extern std::mutex peers_mutex;
 
 inline bool is_valid_peer(const EkfScore &s, uint64_t now)
 {
-	// por enquanto não temos critérios para validar um peer.
-
-	//if (now - s.timestamp_utc > 5'000'000) {
-	//	return false;
-	//}
+	//Se o timestamp for zero, ou estamos em SITL ou o GPS não está configurado corretamente
+	if (s.timestamp_utc == 0){
+		PX4_WARN("timestamp_utc == 0. Analisar Configurações do GPS.");
+	}
+	else if (now - s.timestamp_utc > 5'000'000){ //Se o timestamp estiver funcionando, mas estiver muito velho
+		PX4_WARN("Peer timestamp_utc too old");
+		return false;
+	}
 
 	// filtros opcionais
 	// if (!(s.ekf_flags & estimator_status_s::ESTIMATOR_STATUS_FLAGS_VALID_POS)) return false;
@@ -74,7 +117,12 @@ inline float compute_score(const EkfScore &s)
 
 inline int32_t elect_leader(const EkfScore &self)
 {
-	uint64_t now = hrt_absolute_time();
+	timespec ts{};
+	px4_clock_gettime(CLOCK_REALTIME, &ts);
+	uint64_t now =
+			uint64_t(ts.tv_sec) * 1000000ULL +
+			uint64_t(ts.tv_nsec) / 1000ULL;
+	//uint64_t now = hrt_absolute_time();
 
 	float best_score = compute_score(self);
 	int32_t best_id = self.instance_id;
