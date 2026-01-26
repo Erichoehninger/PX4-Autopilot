@@ -103,7 +103,7 @@ inline bool is_valid_peer(const EkfScore &s, uint64_t now)
 {
 	//Se o timestamp for zero, ou estamos em SITL ou o GPS não está configurado corretamente
 	if (s.timestamp_utc == 0){
-		PX4_WARN("timestamp_utc == 0. Analisar Configurações do GPS.");
+		//PX4_WARN("timestamp_utc == 0. Analisar Configurações do GPS.");
 	}
 	//else if (now > s.timestamp_utc && (now - s.timestamp_utc) > 20000) { // > 20 ms
 	//	uint64_t latency_us = now - s.timestamp_utc;
@@ -152,25 +152,26 @@ inline int32_t elect_leader(const EkfScore &self)
 	float best_score = compute_score(self);
 	int32_t best_id = self.instance_id;
 
+	{
 	std::lock_guard<std::mutex> lock(peers_mutex);
 
-	for (const auto &[id, peer] : peers) {
+		for (const auto &[id, peer] : peers) {
 
-		if (id == self.instance_id) {
-			continue;
-		}
+			if (id == self.instance_id) {
+				continue;
+			}
 
-		if (!is_valid_peer(peer.score, now)) {
-			continue;
-		}
+			if (!is_valid_peer(peer.score, now)) {
+				continue;
+			}
 
-		float s = compute_score(peer.score);
+			float s = compute_score(peer.score);
 
-		if (s > best_score) {
-			best_score = s;
-			best_id = id;
+			if (s > best_score) {
+				best_score = s;
+				best_id = id;
+			}
 		}
 	}
-
 	return best_id;
 }

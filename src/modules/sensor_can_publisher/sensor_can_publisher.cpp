@@ -47,7 +47,7 @@ class SensorCanPublisher :
 
 public:
 	SensorCanPublisher(int max_iter) :
-		ScheduledWorkItem(MODULE_NAME,px4::wq_configurations::hp_default),_max_iter(max_iter)
+		ScheduledWorkItem(MODULE_NAME,px4::wq_configurations::test1),_max_iter(max_iter)
 		{
 			param_t p_comm_id = param_find("PX4_COMM_ID");
 			param_get(p_comm_id, &_my_id);
