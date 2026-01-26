@@ -273,14 +273,21 @@ extern "C" __EXPORT int sensor_can_publisher_main(int argc, char *argv[])
 	if (!strcmp(argv[1], "status")) {
 		if (g_instance) {
 			PX4_INFO("sensor_can_publisher is running");
-			for (auto &it : peers) {
-				it.second.latency.print(it.first);
+			{
+			std::lock_guard<std::mutex> lock(peers_mutex);
+				for (auto &it : peers) {
+					it.second.latency.print(it.first);
+				}
 			}
+
 			PX4_INFO("Líder Atual: %ld", (long)g_instance->get_leader_id());
 		} else {
 			PX4_INFO("sensor_can_publisher is stopped");
-			for (auto &it : peers) {
-				it.second.latency.print(it.first);
+			{
+			std::lock_guard<std::mutex> lock(peers_mutex);
+				for (auto &it : peers) {
+					it.second.latency.print(it.first);
+				}
 			}
 		}
 		return 0;
