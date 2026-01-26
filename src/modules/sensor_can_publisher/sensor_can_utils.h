@@ -3,7 +3,7 @@
 #include <px4_platform_common/posix.h>
 #include <uORB/topics/estimator_status.h>
 #include <uORB/topics/vehicle_status.h>
-
+#define EKF_BROADCAST_PORT 14560
 
 
 #include <map>
@@ -35,6 +35,7 @@ struct LatencyStats {
 	uint64_t max_us{0};
 	uint64_t sum_us{0};
 	uint32_t samples{0};
+	uint32_t lost_packages{0};
 
 	void update(uint64_t latency_us)
 	{
@@ -65,6 +66,20 @@ struct LatencyStats {
 			max_us,
 			(unsigned long)samples
 		);
+		PX4_INFO(
+			"lost packages: %d%% (%u lost out of %u)",
+			percentage_lost_pkgs(),
+			lost_packages,
+			samples + lost_packages
+		);
+	}
+	int percentage_lost_pkgs() const
+	{
+		uint32_t total = samples + lost_packages;
+		if (total == 0) {
+			return 0;
+		}
+		return static_cast<int>((static_cast<float>(lost_packages) / static_cast<float>(total)) * 100.0f);
 	}
 };
 struct PeerState {
@@ -75,8 +90,12 @@ struct PeerState {
 
 
 
-extern std::map<int32_t, PeerState> peers;
-extern std::mutex peers_mutex;
+/* ======================== GLOBALS ======================== */
+
+inline std::map<int32_t, PeerState> peers;
+inline std::mutex peers_mutex;
+bool verbose = false;
+
 
 /* ======================== UTILS ========================== */
 
@@ -86,10 +105,16 @@ inline bool is_valid_peer(const EkfScore &s, uint64_t now)
 	if (s.timestamp_utc == 0){
 		PX4_WARN("timestamp_utc == 0. Analisar Configurações do GPS.");
 	}
-	else if (now - s.timestamp_utc > 5'000'000){ //Se o timestamp estiver funcionando, mas estiver muito velho
-		PX4_WARN("Peer timestamp_utc too old");
-		return false;
-	}
+	//else if (now > s.timestamp_utc && (now - s.timestamp_utc) > 20000) { // > 20 ms
+	//	uint64_t latency_us = now - s.timestamp_utc;
+//
+	//	PX4_WARN(
+	//		"Processing latency too high | latency=%" PRIu64 " us",
+	//		latency_us
+	//	);
+//
+	//	return false;
+	//}
 
 	// filtros opcionais
 	// if (!(s.ekf_flags & estimator_status_s::ESTIMATOR_STATUS_FLAGS_VALID_POS)) return false;
