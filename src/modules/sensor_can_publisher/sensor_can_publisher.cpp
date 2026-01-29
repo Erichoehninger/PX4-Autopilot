@@ -23,7 +23,6 @@
 #include <unistd.h>
 #include <cstring>
 #include <cstdlib>
-#include <thread>
 #include <inttypes.h>
 #include <time.h>
 #include <poll.h>
@@ -34,6 +33,9 @@
 
 #include "sensor_can_utils.h"
 #include "sensor_can_rx.h"
+#include <px4_platform_common/px4_config.h>
+#include <px4_platform_common/board_common.h>
+
 
 
 
@@ -47,32 +49,58 @@ class SensorCanPublisher :
 
 public:
 	SensorCanPublisher(int max_iter) :
-		ScheduledWorkItem(MODULE_NAME,px4::wq_configurations::test1),_max_iter(max_iter)
-		{
-			param_t p_comm_id = param_find("PX4_COMM_ID");
-			param_get(p_comm_id, &_my_id);
+		ScheduledWorkItem(MODULE_NAME,px4::wq_configurations::test1),_max_iter(max_iter){}
+	int init()
+	{
+		param_t p_comm_id = param_find("PX4_COMM_ID");
 
-			PX4_INFO("PX4_COMM_ID = %ld", (long)_my_id);
-
-			PX4_INFO("ScheduledWorkItem started");
-			_tx_sock = socket(AF_INET, SOCK_DGRAM, 0);
-			int enable = 1;
-			setsockopt(_tx_sock, SOL_SOCKET, SO_BROADCAST, &enable, sizeof(enable)); //enable o broadcast
-
-			_dest.sin_family = AF_INET;
-			_dest.sin_port = htons(EKF_BROADCAST_PORT);
-			_dest.sin_addr.s_addr = inet_addr("255.255.255.255");
-			// ou inet_addr("192.168.1.255") se quiser mais controle
-
-			_rx = new SensorCanRx(_my_id);
-
-
-
-
-			PX4_INFO("sensor_can_publisher running");
-
-
+		if (p_comm_id == PARAM_INVALID) {
+			PX4_ERR("PX4_COMM_ID param not found");
+			return -1;
 		}
+
+		param_get(p_comm_id, &_my_id);
+
+		if (_my_id < 0) {
+			PX4_ERR("PX4_COMM_ID not set or invalid");
+			return -1;
+		}
+
+		//char guid[PX4_GUID_FORMAT_SIZE];
+		//if (board_get_px4_guid_formated(guid, sizeof(guid)) != 0) {
+		//	PX4_ERR("Failed to get board GUID");
+		//	return -1;
+		//}
+		//PX4_INFO("Board GUID: %s", guid);
+		//PX4_INFO("PX4_COMM_ID = %ld", (long)_my_id);
+
+		_tx_sock = socket(AF_INET, SOCK_DGRAM, 0);
+		if (_tx_sock < 0) {
+			PX4_ERR("socket creation failed");
+			return -1;
+		}
+
+		int enable = 1;
+		setsockopt(_tx_sock, SOL_SOCKET, SO_BROADCAST, &enable, sizeof(enable));
+
+		_dest.sin_family = AF_INET;
+		_dest.sin_port = htons(EKF_BROADCAST_PORT);
+		_dest.sin_addr.s_addr = inet_addr("255.255.255.255");
+
+		px4_sem_init(&peers_sem, 1, 1);
+
+		_rx = new SensorCanRx(_my_id);
+		if (!_rx) {
+			PX4_ERR("Failed to create RX");
+			return -1;
+		}
+
+		PX4_INFO("sensor_can_publisher running");
+		ScheduleOnInterval(20000); // já agenda aqui 👍
+
+		return 0;
+	}
+
 	~SensorCanPublisher()
 	{
 		local_stop();
@@ -80,10 +108,7 @@ public:
 		if (_tx_sock >= 0) {
 			close(_tx_sock);
 		}
-		if (_rx) {
-			delete _rx;
-			_rx = nullptr;
-		}
+
 
 	}
 
@@ -179,11 +204,19 @@ public:
 
 
 
-	void local_stop(){
+	void local_stop()
+	{
 		request_stop();
-		ScheduleClear();
 
+		if (_rx) {
+			delete _rx;
+			_rx = nullptr;
+		}
+
+		px4_sem_destroy(&peers_sem);
+		ScheduleClear();
 	}
+
 
 	int32_t get_my_id() const {
 		return _my_id;
@@ -249,8 +282,19 @@ extern "C" __EXPORT int sensor_can_publisher_main(int argc, char *argv[])
 
 		if (!g_instance) {
 			g_instance = new SensorCanPublisher(max_iter);
-			g_instance->ScheduleNow();
-		}
+
+			if (!g_instance) {
+				PX4_ERR("alloc failed");
+				return -1;
+			}
+
+			if (g_instance->init() != 0) {
+				delete g_instance;
+				g_instance = nullptr;
+				return -1;
+			}
+			}
+
 
 		return 0;
 	}
@@ -273,22 +317,20 @@ extern "C" __EXPORT int sensor_can_publisher_main(int argc, char *argv[])
 	if (!strcmp(argv[1], "status")) {
 		if (g_instance) {
 			PX4_INFO("sensor_can_publisher is running");
-			{
-			std::lock_guard<std::mutex> lock(peers_mutex);
-				for (auto &it : peers) {
-					it.second.latency.print(it.first);
+			px4_sem_wait(&peers_sem);
+				for (int i = 0; i < MAX_PEERS; i++) {
+					int32_t id = peer_ids[i];
+					if (id < 0) {
+						continue;
+					}
+					peers[i].latency.print(id);
 				}
-			}
+			px4_sem_post(&peers_sem);
 
 			PX4_INFO("Líder Atual: %ld", (long)g_instance->get_leader_id());
 		} else {
 			PX4_INFO("sensor_can_publisher is stopped");
-			{
-			std::lock_guard<std::mutex> lock(peers_mutex);
-				for (auto &it : peers) {
-					it.second.latency.print(it.first);
-				}
-			}
+
 		}
 		return 0;
 	}

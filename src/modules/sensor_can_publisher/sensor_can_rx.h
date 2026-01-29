@@ -73,19 +73,26 @@ public:
 
 
             uint64_t latency = tempo_real_us - rx.timestamp_utc;
-            {
-                std::lock_guard<std::mutex> lock(peers_mutex);
-                PeerState &peer = peers[rx.instance_id];
 
-                peer.score = rx;
-                peer.last_rx = tempo_real_us;
+            px4_sem_wait(&peers_sem);
 
-                if (rx.timestamp_utc > 0 && latency < 100000) {
-                    peer.latency.update(latency);
-                } else if (latency > 100000) {
-                    peer.latency.lost_packages++;
+                int idx = find_or_allocate_peer(rx.instance_id);
+
+                if (idx >= 0) {
+                    PeerState &peer = peers[idx];
+
+                    peer.score   = rx;
+                    peer.last_rx = tempo_real_us;
+
+                    if (rx.timestamp_utc > 0 && latency < 100000) {
+                        peer.latency.update(latency);
+                    } else if (latency > 100000) {
+                        peer.latency.lost_packages++;
+                    }
                 }
-            }
+
+            px4_sem_post(&peers_sem);
+
             processed++;
         }
 

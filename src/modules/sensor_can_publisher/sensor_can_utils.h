@@ -3,11 +3,13 @@
 #include <px4_platform_common/posix.h>
 #include <uORB/topics/estimator_status.h>
 #include <uORB/topics/vehicle_status.h>
+#include <px4_platform_common/px4_config.h>
+#include <px4_platform_common/defines.h>
+#include <px4_platform_common/sem.h>
 #define EKF_BROADCAST_PORT 14560
 
 
-#include <map>
-#include <mutex>
+
 #include <cmath>
 
 /* ======================== PAYLOAD ======================== */
@@ -54,7 +56,7 @@ struct LatencyStats {
 	void print(int32_t peer_id) const
 	{
 		if (samples == 0) {
-			PX4_INFO("Peer %ld: no latency samples collected", (long)peer_id);
+			//PX4_INFO("Peer %ld: no latency samples collected", (long)peer_id);
 			return;
 		}
 
@@ -67,7 +69,7 @@ struct LatencyStats {
 			(unsigned long)samples
 		);
 		PX4_INFO(
-			"lost packages: %d%% (%u lost out of %u)",
+			"lost packages: %d%% (%lu lost out of %lu)",
 			percentage_lost_pkgs(),
 			lost_packages,
 			samples + lost_packages
@@ -92,8 +94,12 @@ struct PeerState {
 
 /* ======================== GLOBALS ======================== */
 
-inline std::map<int32_t, PeerState> peers;
-inline std::mutex peers_mutex;
+static constexpr int MAX_PEERS = 3;
+PeerState peers[MAX_PEERS];
+int32_t peer_ids[MAX_PEERS];
+sem_t peers_sem;
+
+
 bool verbose = false;
 
 
@@ -152,26 +158,53 @@ inline int32_t elect_leader(const EkfScore &self)
 	float best_score = compute_score(self);
 	int32_t best_id = self.instance_id;
 
-	{
-	std::lock_guard<std::mutex> lock(peers_mutex);
 
-		for (const auto &[id, peer] : peers) {
+	px4_sem_wait(&peers_sem);
 
+		for (int i = 0; i < MAX_PEERS; i++) {
+
+			const int32_t id = peer_ids[i];
+			// slot vazio
+			if (id < 0) {
+				continue;
+			}
+			const PeerState &peer = peers[i];
 			if (id == self.instance_id) {
 				continue;
 			}
-
 			if (!is_valid_peer(peer.score, now)) {
 				continue;
 			}
-
 			float s = compute_score(peer.score);
-
 			if (s > best_score) {
 				best_score = s;
 				best_id = id;
 			}
 		}
-	}
+	px4_sem_post(&peers_sem);
+
+
 	return best_id;
+}
+
+inline int find_or_allocate_peer(int32_t peer_id)
+{
+	// 1) já existe?
+	for (int i = 0; i < MAX_PEERS; i++) {
+		if (peer_ids[i] == peer_id) {
+			return i;
+		}
+	}
+
+	// 2) procurar slot livre
+	for (int i = 0; i < MAX_PEERS; i++) {
+		if (peer_ids[i] < 0) {
+			peer_ids[i] = peer_id;
+			peers[i] = PeerState{}; // zera estado
+			return i;
+		}
+	}
+
+	// 3) tabela cheia
+	return -1;
 }

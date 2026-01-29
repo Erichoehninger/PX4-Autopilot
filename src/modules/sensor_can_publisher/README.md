@@ -24,6 +24,9 @@ Módulo de gerenciamento de tripla redundância para o projeto GD350.
 - Definir PX4_COMM_ID no terminal PX4: `param set PX4_COMM_ID <numero_da_instancia>`
 - Uso do módulo dentro do terminal PX4: `sensor_can_publisher start <numero_de_envios>`
 
+### Instruções compilação para Pixhawk 6x Pro:
+- Compilação: `make px4_fmu-v6x_default`
 
 #### Observações:
 - Sempre que o código PX4 for recompilado, é necessário reconfigurar o PX4_COMM_ID das instâncias configuradas
+- Pixhawk 6x Pro roda com C++ reduzido. std::map, std::threads, std::mutex, etc não compilam.
