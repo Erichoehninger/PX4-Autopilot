@@ -110,6 +110,7 @@ set(DSDLC_INPUTS
 	"${DSDLC_DIR}/cuav"
 	"${DSDLC_DIR}/dronecan"
 	"${DSDLC_DIR}/uavcan"
+	"${DSDLC_DIR}/globaldrones"
 )
 set(DSDLC_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/include/dsdlc_generated")
 
@@ -182,6 +183,9 @@ px4_add_module(
 		sensors/ice_status.cpp
 		sensors/hygrometer.cpp
 		sensors/safety_button.cpp
+
+		#GD350
+		sensors/ekf_score.cpp
 	MODULE_CONFIG
 		module.yaml
 	DEPENDS

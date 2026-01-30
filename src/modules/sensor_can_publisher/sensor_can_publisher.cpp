@@ -12,12 +12,14 @@
 #include <parameters/param.h>
 #include <drivers/drv_hrt.h>
 
-
+#include <uORB/uORB.h>
 #include <uORB/Subscription.hpp>
+#include <uORB/Publication.hpp>
 #include <uORB/topics/estimator_status.h>
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/vehicle_local_position.h>
 #include <uORB/topics/sensor_gps.h>
+#include <uORB/topics/ekf_score.h>
 
 
 #include <unistd.h>
@@ -176,7 +178,7 @@ public:
 			sizeof(_dest)
 			);
 
-
+		publish_ekf_score_uorb(self);
 		/* ---------- Leader election ---------- */
 
 
@@ -226,6 +228,27 @@ public:
 		return leader_id;
 	}
 
+		void publish_ekf_score_uorb(const EkfScore &self)
+	{
+		ekf_score_s msg{};
+		msg.timestamp = hrt_absolute_time();
+
+		msg.instance_id = self.instance_id;
+
+		msg.vel_test = self.vel_test;
+		msg.pos_test = self.pos_test;
+		msg.hgt_test = self.hgt_test;
+		msg.hdg_test = self.hdg_test;
+
+		msg.pos_var = self.pos_var;
+		msg.vel_var = self.vel_var;
+
+		msg.ekf_flags = self.ekf_flags;
+		msg.nav_state = self.nav_state;
+		msg.timestamp_utc = self.timestamp_utc;
+
+		_ekf_score_pub.publish(msg);
+	}
 
 private:
 	int _max_iter{-1};
@@ -243,6 +266,8 @@ private:
 	uORB::Subscription _veh_sub{ORB_ID(vehicle_status)};
 	uORB::Subscription _lpos_sub{ORB_ID(vehicle_local_position)};
 	uORB::Subscription _gps_sub{ORB_ID(sensor_gps)};
+	uORB::Publication<ekf_score_s> _ekf_score_pub{ORB_ID(ekf_score)};
+
 
 	/* cache */
 	estimator_status_s est{};
