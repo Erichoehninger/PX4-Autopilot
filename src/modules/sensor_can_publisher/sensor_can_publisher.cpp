@@ -201,6 +201,52 @@ public:
 		publish_ekf_score_uorb(self);
 		/* ---------- Leader election ---------- */
 
+		for (int i = 0; i < MAX_EKF_INSTANCES; i++) {
+
+	if (_ekf_score_subs[i].updated()) {
+
+		ekf_score_s rx{};
+
+		if (_ekf_score_subs[i].copy(&rx)) {
+
+			// ignora mensagem própria
+			if (rx.instance_id == _my_id) {
+				continue;
+			}
+
+			PX4_INFO(
+				"RX ekf_score | uORB instance=%d | sender_id=%ld | vel_test=%f",
+				i,
+				(long)rx.instance_id,
+				(double)rx.vel_test
+			);
+
+			uint64_t now = hrt_absolute_time();
+
+			uint64_t latency = 0;
+			if (rx.timestamp_utc > 0 && now > rx.timestamp_utc) {
+				latency = now - rx.timestamp_utc;
+			}
+
+			px4_sem_wait(&peers_sem);
+
+			int idx = find_or_allocate_peer(rx.instance_id);
+			if (idx >= 0) {
+				PeerState &peer = peers[idx];
+				peer.score   = ekfScoreFromUorb(rx);
+				peer.last_rx = now;
+
+				if (latency > 0 && latency < 100000) {
+					peer.latency.update(latency);
+				} else {
+					peer.latency.lost_packages++;
+				}
+			}
+
+			px4_sem_post(&peers_sem);
+		}
+	}
+}
 
 		leader_id = elect_leader(self);
 
@@ -297,6 +343,15 @@ private:
 
 	int32_t leader_id{-1};
 
+	static constexpr int MAX_EKF_INSTANCES = 3;
+
+	uORB::Subscription _ekf_score_subs[MAX_EKF_INSTANCES] = {
+	uORB::Subscription(ORB_ID(ekf_score), 0),
+	uORB::Subscription(ORB_ID(ekf_score), 1),
+	uORB::Subscription(ORB_ID(ekf_score), 2),
+};
+
+
 
 
 
@@ -365,14 +420,11 @@ extern "C" __EXPORT int sensor_can_publisher_main(int argc, char *argv[])
 			px4_sem_wait(&peers_sem);
 				for (int i = 0; i < MAX_PEERS; i++) {
 					int32_t id = peer_ids[i];
-					if (id < 0) {
-						continue;
-					}
 					peers[i].latency.print(id);
 				}
 			px4_sem_post(&peers_sem);
 
-			PX4_INFO("Líder Atual: %ld", (long)g_instance->get_leader_id());
+			PX4_INFO("Eu: %ld | Líder Atual: %ld", (long)g_instance->get_my_id(), (long)g_instance->get_leader_id());
 		} else {
 			PX4_INFO("sensor_can_publisher is stopped");
 
