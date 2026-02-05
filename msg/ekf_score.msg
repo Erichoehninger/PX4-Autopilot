@@ -2,7 +2,7 @@
 # pacote de EkfScore
 #
 
-uint8 instance_id
+int32  instance_id
 
 float32 vel_test
 float32 pos_test

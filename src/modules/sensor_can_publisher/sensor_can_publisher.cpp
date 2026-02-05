@@ -51,23 +51,42 @@ class SensorCanPublisher :
 
 public:
 	SensorCanPublisher(int max_iter) :
-		ScheduledWorkItem(MODULE_NAME,px4::wq_configurations::test1),_max_iter(max_iter){}
+		ScheduledWorkItem(MODULE_NAME,px4::wq_configurations::hp_default),_max_iter(max_iter){}
 	int init()
 	{
-		param_t p_comm_id = param_find("PX4_COMM_ID");
+		param_t p_comm_id = param_find("SYS_PX4_COMM_ID");
 
 		if (p_comm_id == PARAM_INVALID) {
-			PX4_ERR("PX4_COMM_ID param not found");
+			PX4_ERR("SYS_PX4_COMM_ID param not found");
 			return -1;
 		}
 
 		param_get(p_comm_id, &_my_id);
 
 		if (_my_id < 0) {
-			PX4_ERR("PX4_COMM_ID not set or invalid");
+			PX4_ERR("SYS_PX4_COMM_ID not set or invalid");
 			return -1;
 		}
 
+		char px4guid_fmt_buffer[PX4_GUID_FORMAT_SIZE];
+
+		board_get_px4_guid_formated(px4guid_fmt_buffer, sizeof(px4guid_fmt_buffer));
+		PX4_INFO_RAW("PX4GUID: %s\n", px4guid_fmt_buffer);
+		// 1. Encontrar o comprimento da string
+		int len = strlen(px4guid_fmt_buffer);
+
+		if (len >= 6) {
+			// 2. Apontar para o início dos últimos 6 dígitos
+			char *last_six_str = &px4guid_fmt_buffer[len - 6];
+
+			// 3. Converter de Hexadecimal (base 16) para Inteiro
+			int last_six_int = (int)strtol(last_six_str, NULL, 16);
+
+			PX4_INFO("Last 6 hex as INT: %d", last_six_int);
+			param_set(p_comm_id, &last_six_int);
+			_my_id = last_six_int%256;
+		}
+		else {PX4_ERR("GUID string too short");}
 		//char guid[PX4_GUID_FORMAT_SIZE];
 		//if (board_get_px4_guid_formated(guid, sizeof(guid)) != 0) {
 		//	PX4_ERR("Failed to get board GUID");
@@ -92,6 +111,7 @@ public:
 		px4_sem_init(&peers_sem, 1, 1);
 
 		_rx = new SensorCanRx(_my_id);
+		_rx->init();
 		if (!_rx) {
 			PX4_ERR("Failed to create RX");
 			return -1;
@@ -235,7 +255,7 @@ public:
 
 		msg.instance_id = self.instance_id;
 
-		msg.vel_test = self.vel_test;
+		msg.vel_test = 4001;//self.vel_test; //4001 é valor pra teste
 		msg.pos_test = self.pos_test;
 		msg.hgt_test = self.hgt_test;
 		msg.hdg_test = self.hdg_test;
@@ -287,7 +307,7 @@ static SensorCanPublisher *g_instance{nullptr};
 extern "C" __EXPORT int sensor_can_publisher_main(int argc, char *argv[])
 {
 	if (argc < 2) {
-		PX4_INFO("Usage: sensor_can_publisher {start|stop|status} ...");
+		PX4_INFO("Usage: sensor_can_publisher {start|stop|status|listen <instance>|}");
 		return -1;
 	}
 
@@ -359,6 +379,18 @@ extern "C" __EXPORT int sensor_can_publisher_main(int argc, char *argv[])
 		}
 		return 0;
 	}
+
+	if (!strcmp(argv[1], "listen")) {
+		if (argc < 3) {
+			PX4_ERR("Usage: sensor_can_publisher listen <instance>");
+			return -1;
+		}
+
+		int instance = std::atoi(argv[2]);
+
+		return listen_ekf_score_instance(instance);
+	}
+
 
 	PX4_ERR("Unknown command");
 	return -1;

@@ -6,6 +6,9 @@
 #include <px4_platform_common/px4_config.h>
 #include <px4_platform_common/defines.h>
 #include <px4_platform_common/sem.h>
+#include <poll.h>
+#include <uORB/uORB.h>
+
 #define EKF_BROADCAST_PORT 14560
 
 
@@ -15,7 +18,7 @@
 /* ======================== PAYLOAD ======================== */
 
 struct EkfScore {
-	int32_t  instance_id;
+	int32_t   instance_id;
 	uint64_t timestamp_utc;
 
 	float vel_test;
@@ -96,11 +99,11 @@ struct PeerState {
 
 static constexpr int MAX_PEERS = 3;
 PeerState peers[MAX_PEERS];
-int32_t peer_ids[MAX_PEERS];
+int32_t peer_ids[MAX_PEERS] = {-1, -1, -1}; // -1 = slot livre
 sem_t peers_sem;
 
 
-bool verbose = false;
+bool verbose = true;
 
 
 /* ======================== UTILS ========================== */
@@ -207,4 +210,77 @@ inline int find_or_allocate_peer(int32_t peer_id)
 
 	// 3) tabela cheia
 	return -1;
+}
+
+static EkfScore ekfScoreFromUorb(const ekf_score_s &u)
+{
+	EkfScore s{};
+
+	s.instance_id = u.instance_id;
+
+	s.vel_test = u.vel_test;
+	s.pos_test = u.pos_test;
+	s.hgt_test = u.hgt_test;
+	s.hdg_test = u.hdg_test;
+
+	s.pos_var = u.pos_var;
+	s.vel_var = u.vel_var;
+
+	s.ekf_flags = u.ekf_flags;
+	s.nav_state = u.nav_state;
+	s.timestamp_utc = u.timestamp_utc;
+
+	return s;
+}
+
+static int listen_ekf_score_instance(int instance)
+{
+	int fd = orb_subscribe_multi(ORB_ID(ekf_score), instance);
+
+	if (fd < 0) {
+		PX4_ERR("Failed to subscribe to ekf_score instance %d", instance);
+		return -1;
+	}
+
+	PX4_INFO("Listening to ekf_score instance %d (Ctrl+C to stop)", instance);
+
+	pollfd fds{};
+	fds.fd = fd;
+	fds.events = POLLIN;
+	int count = 0; //numero de mensagens recebidas
+	while (count <1) {
+		int ret = poll(&fds, 1, 1000);
+
+		if (ret < 0) {
+			PX4_ERR("poll error");
+			break;
+		}
+
+		if (ret == 0) {
+			// timeout, igual listener (silencioso)
+			continue;
+		}
+
+		if (fds.revents & POLLIN) {
+			ekf_score_s msg{};
+
+			orb_copy(ORB_ID(ekf_score), fd, &msg);
+
+			PX4_INFO(
+				"ekf_score[%d]: ts=%" PRIu64
+				" inst_id=%ld vel=%.2f pos=%.2f hgt=%.2f hdg=%.2f",
+				instance,
+				msg.timestamp,
+				(long)msg.instance_id,
+				(double)msg.vel_test,
+				(double)msg.pos_test,
+				(double)msg.hgt_test,
+				(double)msg.hdg_test
+			);
+			count++;
+		}
+	}
+
+	orb_unsubscribe(fd);
+	return 0;
 }

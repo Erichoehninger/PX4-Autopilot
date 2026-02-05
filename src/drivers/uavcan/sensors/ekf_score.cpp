@@ -40,3 +40,50 @@ void UavcanEkfScoreBridge::ekf_score_cb(
 	_ekf_score_pub.publish(s);
 }
 
+/*==========================TX===============================*/
+const char *const UavcanEkfScoreTxBridge::NAME = "ekf_score_tx";
+
+
+UavcanEkfScoreTxBridge::UavcanEkfScoreTxBridge(
+	uavcan::INode &node,
+	NodeInfoPublisher *node_info_publisher) :
+	UavcanSensorBridgeBase("uavcan_ekf_score_tx",
+			       ORB_ID(ekf_score),
+			       node_info_publisher),
+	_pub(node)
+{
+}
+
+int UavcanEkfScoreTxBridge::init()
+{
+	return _pub.init();
+}
+void UavcanEkfScoreTxBridge::update()
+{
+	ekf_score_s s{};
+
+	if (!_sub_ekf_score.update(&s)) {
+		return;
+	}
+
+	globaldrones::EkfScore msg{};
+
+	msg.instance_id   = s.instance_id;
+	msg.vel_test      = s.vel_test;
+	msg.pos_test      = s.pos_test;
+	msg.hgt_test      = s.hgt_test;
+	msg.hdg_test      = s.hdg_test;
+	msg.pos_var       = s.pos_var;
+	msg.vel_var       = s.vel_var;
+	msg.ekf_flags     = s.ekf_flags;
+	msg.nav_state     = s.nav_state;
+	msg.timestamp_utc = s.timestamp_utc;
+
+	int res = _pub.broadcast(msg);
+
+	PX4_WARN("EkfScore CAN publish res: %d", res);
+
+	if (res < 0) {
+		PX4_WARN("EkfScore CAN publish failed: %d", res);
+	}
+}

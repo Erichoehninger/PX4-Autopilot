@@ -247,7 +247,6 @@ void IUavcanSensorBridge::make_all(uavcan::INode &node, List<IUavcanSensorBridge
 list.add(new UavcanEkfScoreBridge(node, node_info_publisher));
 
 
-
 }
 
 /*

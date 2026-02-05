@@ -84,6 +84,7 @@
 #include "sensors/sensor_bridge.hpp"
 #include "uavcan_driver.hpp"
 #include "uavcan_servers.hpp"
+#include "sensors/ekf_score.hpp"
 
 #include <lib/drivers/device/Device.hpp>
 #include <lib/mixer_module/mixer_module.hpp>
@@ -107,6 +108,7 @@
 #include <uORB/topics/uavcan_parameter_request.h>
 #include <uORB/topics/uavcan_parameter_value.h>
 #include <uORB/topics/vehicle_command_ack.h>
+
 
 using namespace time_literals;
 
@@ -284,6 +286,8 @@ private:
 #if defined(CONFIG_UAVCAN_RGB_CONTROLLER)
 	UavcanRGBController             _rgbled_controller;
 #endif
+
+	UavcanEkfScoreTxBridge    _ekf_score_tx_bridge;
 
 	UavcanLogMessage                _log_message_controller;
 

@@ -102,6 +102,7 @@ UavcanNode::UavcanNode(uavcan::ICanDriver &can_driver, uavcan::ISystemClock &sys
 #if defined(CONFIG_UAVCAN_RGB_CONTROLLER)
 	_rgbled_controller(_node),
 #endif
+	_ekf_score_tx_bridge(_node, &_node_info_publisher),
 	_log_message_controller(_node),
 	_time_sync_master(_node),
 	_time_sync_slave(_node),
@@ -613,6 +614,9 @@ UavcanNode::init(uavcan::NodeID node_id, UAVCAN_DRIVER::BusEvent &bus_events)
 	_esc_controller.set_node_info_publisher(&_node_info_publisher);
 #endif
 
+
+
+
 	/* Set up shared service clients */
 	_param_getset_client.setCallback(GetSetCallback(this, &UavcanNode::cb_getset));
 	_param_opcode_client.setCallback(ExecuteOpcodeCallback(this, &UavcanNode::cb_opcode));
@@ -752,6 +756,8 @@ UavcanNode::Run()
 	}
 
 	_node.spinOnce(); // expected to be non-blocking
+
+	_ekf_score_tx_bridge.update();
 
 	publish_can_interface_statuses();
 
