@@ -447,4 +447,3 @@ extern "C" __EXPORT int sensor_can_publisher_main(int argc, char *argv[])
 	PX4_ERR("Unknown command");
 	return -1;
 }
-

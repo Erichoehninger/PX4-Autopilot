@@ -186,6 +186,7 @@ px4_add_module(
 
 		#GD350
 		sensors/ekf_score.cpp
+		sensors/leader_publishable_info.cpp
 	MODULE_CONFIG
 		module.yaml
 	DEPENDS

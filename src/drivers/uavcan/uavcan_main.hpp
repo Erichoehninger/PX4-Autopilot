@@ -85,6 +85,7 @@
 #include "uavcan_driver.hpp"
 #include "uavcan_servers.hpp"
 #include "sensors/ekf_score.hpp"
+#include "sensors/leader_publishable_info.hpp"
 
 #include <lib/drivers/device/Device.hpp>
 #include <lib/mixer_module/mixer_module.hpp>
@@ -288,6 +289,7 @@ private:
 #endif
 
 	UavcanEkfScoreTxBridge    _ekf_score_tx_bridge;
+	UavcanLeaderPublishableInfoBridge _leader_publishable_info_bridge;
 
 	UavcanLogMessage                _log_message_controller;
 
