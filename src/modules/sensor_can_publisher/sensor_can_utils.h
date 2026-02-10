@@ -151,12 +151,8 @@ inline float compute_score(const EkfScore &s)
 
 inline int32_t elect_leader(const EkfScore &self)
 {
-	timespec ts{};
-	px4_clock_gettime(CLOCK_REALTIME, &ts);
-	uint64_t now =
-			uint64_t(ts.tv_sec) * 1000000ULL +
-			uint64_t(ts.tv_nsec) / 1000ULL;
-	//uint64_t now = hrt_absolute_time();
+	//timespec ts{};
+	//px4_clock_gettime(CLOCK_REALTIME, &ts);
 
 	float best_score = compute_score(self);
 	int32_t best_id = self.instance_id;
@@ -175,9 +171,9 @@ inline int32_t elect_leader(const EkfScore &self)
 			if (id == self.instance_id) {
 				continue;
 			}
-			if (!is_valid_peer(peer.score, now)) {
-				continue;
-			}
+			//if (!is_valid_peer(peer.score, now)) {
+			//	continue;
+			//}
 			float s = compute_score(peer.score);
 			if (s > best_score) {
 				best_score = s;

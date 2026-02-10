@@ -681,4 +681,4 @@ mavlink boot_complete
 
 ver all
 
-sensor_can_publisher start -1 -v
+sensor_can_publisher start -1

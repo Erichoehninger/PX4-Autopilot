@@ -52,7 +52,7 @@ class SensorCanPublisher :
 
 public:
 	SensorCanPublisher(int max_iter) :
-		ScheduledWorkItem(MODULE_NAME,px4::wq_configurations::nav_and_controllers),_max_iter(max_iter){}
+		ScheduledWorkItem(MODULE_NAME,px4::wq_configurations::hp_default),_max_iter(max_iter){}
 	int init()
 	{
 		param_t p_comm_id = param_find("SYS_PX4_COMM_ID");
@@ -100,16 +100,18 @@ public:
 
 		px4_sem_init(&peers_sem, 1, 1);
 
-		_rx = new SensorCanRx(_my_id);
-		_rx->init();
-		if (!_rx) {
-			PX4_ERR("Failed to create RX");
-			return -1;
-		}
+		//_rx = new SensorCanRx(_my_id);
+		//_rx->init();
+		//if (!_rx) {
+		//	PX4_ERR("Failed to create RX");
+		//	return -1;
+		//}
 
 		PX4_INFO("sensor_can_publisher running");
 		//ScheduleOnInterval(20000); // já agenda aqui 👍
-		ScheduleNow();
+		//ScheduleNow();
+		ScheduleOnInterval(20000);
+
 
 		return 0;
 	}
@@ -262,7 +264,7 @@ public:
 
 		/* ---------- Reagenda ---------- */
 		//ScheduleOnInterval(20000); // ~50Hz
-		ScheduleDelayed(20000);
+		//ScheduleDelayed(20000);
 
 	}
 
@@ -328,6 +330,7 @@ private:
 	uORB::Subscription _veh_sub{ORB_ID(vehicle_status)};
 	uORB::Subscription _lpos_sub{ORB_ID(vehicle_local_position)};
 	uORB::Subscription _gps_sub{ORB_ID(sensor_gps)};
+	//incluir estimator_global_position quando conectar GPS na Pixhawk
 
 	uORB::Publication<ekf_score_s> _ekf_score_pub{ORB_ID(ekf_score)};
 	uORB::Publication<leader_publishable_info_s> _leader_publishable_info_pub{ORB_ID(leader_publishable_info)};
