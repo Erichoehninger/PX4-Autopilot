@@ -38,6 +38,7 @@
 #include "sensor_bridge.hpp"
 #include <cassert>
 #include "ekf_score.hpp"
+#include "leader_publishable_info.hpp"
 
 #if defined(CONFIG_UAVCAN_SENSOR_ACCEL)
 #include "accel.hpp"
@@ -245,6 +246,7 @@ void IUavcanSensorBridge::make_all(uavcan::INode &node, List<IUavcanSensorBridge
 
 #endif
 list.add(new UavcanEkfScoreBridge(node, node_info_publisher));
+list.add(new UavcanLeaderPublishableInfoBridge(node, node_info_publisher));
 
 
 }

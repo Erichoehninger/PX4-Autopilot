@@ -5,7 +5,7 @@
 #include <uavcan/uavcan.hpp>
 
 #include <globaldrones/LeaderPublishableInfo.hpp>
-
+#include <uavcan/uavcan.hpp>
 #include <uORB/topics/leader_publishable_info.h>
 #include <uORB/PublicationMulti.hpp>
 #include <uORB/Subscription.hpp>
@@ -71,4 +71,5 @@ private:
 		_sub_leader_publishable_info{ORB_ID(leader_publishable_info)};
 
 	uavcan::Publisher<globaldrones::LeaderPublishableInfo> _pub;
+
 };

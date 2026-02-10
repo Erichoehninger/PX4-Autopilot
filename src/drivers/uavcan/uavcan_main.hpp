@@ -289,7 +289,7 @@ private:
 #endif
 
 	UavcanEkfScoreTxBridge    _ekf_score_tx_bridge;
-	UavcanLeaderPublishableInfoBridge _leader_publishable_info_bridge;
+	UavcanLeaderPublishableInfoTxBridge _leader_publishable_info_tx_bridge;
 
 	UavcanLogMessage                _log_message_controller;
 

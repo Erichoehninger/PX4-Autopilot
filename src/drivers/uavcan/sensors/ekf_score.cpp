@@ -15,7 +15,7 @@ UavcanEkfScoreBridge::UavcanEkfScoreBridge(uavcan::INode &node,
 
 int UavcanEkfScoreBridge::init()
 {
-	return _sub.start(EkfScoreCbBinder(this, &UavcanEkfScoreBridge::ekf_score_cb));
+	return _sub.start(EkfScoreCbBinder(this, &UavcanEkfScoreBridge::ekf_score_cb)) ;
 }
 
 

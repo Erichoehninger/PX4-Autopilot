@@ -103,7 +103,7 @@ UavcanNode::UavcanNode(uavcan::ICanDriver &can_driver, uavcan::ISystemClock &sys
 	_rgbled_controller(_node),
 #endif
 	_ekf_score_tx_bridge(_node, &_node_info_publisher),
-	_leader_publishable_info_bridge(_node, &_node_info_publisher),
+	_leader_publishable_info_tx_bridge(_node, &_node_info_publisher),
 	_log_message_controller(_node),
 	_time_sync_master(_node),
 	_time_sync_slave(_node),
@@ -759,7 +759,7 @@ UavcanNode::Run()
 	_node.spinOnce(); // expected to be non-blocking
 
 	_ekf_score_tx_bridge.update();
-	_leader_publishable_info_bridge.update();
+	_leader_publishable_info_tx_bridge.update();
 	publish_can_interface_statuses();
 
 	publish_node_statuses();

@@ -20,6 +20,7 @@
 #include <uORB/topics/vehicle_local_position.h>
 #include <uORB/topics/sensor_gps.h>
 #include <uORB/topics/ekf_score.h>
+#include <uORB/topics/leader_publishable_info.h>
 
 
 #include <unistd.h>
@@ -162,6 +163,9 @@ public:
 		if (_gps_sub.updated()) {
 			_gps_sub.copy(&gps);
 		}
+		if(_leader_publishable_info_sub.updated()) {
+			_leader_publishable_info_sub.copy(&leader_info);
+		}
 
 		/* ---------- Timestamp ---------- */
 
@@ -182,6 +186,7 @@ public:
 		self.hgt_test = est.hgt_test_ratio;
 		self.hdg_test = est.hdg_test_ratio;
 
+
 		self.pos_var = lpos.eph;
 		self.vel_var = lpos.evh;
 
@@ -200,55 +205,71 @@ public:
 
 		publish_ekf_score_uorb(self);
 		/* ---------- Leader election ---------- */
-
+		//int count = 0;
 		for (int i = 0; i < MAX_EKF_INSTANCES; i++) {
 
-	if (_ekf_score_subs[i].updated()) {
+			if(_leader_publishable_info_subs[i].updated()){
+				;//_leader_publishable_info_subs[i].copy(&leader_info)	;
+				}
 
-		ekf_score_s rx{};
 
-		if (_ekf_score_subs[i].copy(&rx)) {
-
-			// ignora mensagem própria
-			if (rx.instance_id == _my_id) {
-				continue;
-			}
-
-			PX4_INFO(
-				"RX ekf_score | uORB instance=%d | sender_id=%ld | vel_test=%f",
-				i,
-				(long)rx.instance_id,
-				(double)rx.vel_test
-			);
-
-			uint64_t now = hrt_absolute_time();
-
-			uint64_t latency = 0;
-			if (rx.timestamp_utc > 0 && now > rx.timestamp_utc) {
-				latency = now - rx.timestamp_utc;
-			}
-
-			px4_sem_wait(&peers_sem);
-
-			int idx = find_or_allocate_peer(rx.instance_id);
-			if (idx >= 0) {
-				PeerState &peer = peers[idx];
-				peer.score   = ekfScoreFromUorb(rx);
-				peer.last_rx = now;
-
-				if (latency > 0 && latency < 100000) {
-					peer.latency.update(latency);
-				} else {
-					peer.latency.lost_packages++;
+			if (_ekf_score_subs[i].updated()) {
+				ekf_score_s rx{};
+				if (_ekf_score_subs[i].copy(&rx)) {
+					// ignora mensagem própria
+					if (rx.instance_id == _my_id) {
+						continue;
+					}
+					PX4_INFO(
+						"RX ekf_score | uORB instance=%d | sender_id=%ld | vel_test=%f",
+						i,
+						(long)rx.instance_id,
+						(double)rx.vel_test
+					);
+					uint64_t now = hrt_absolute_time();
+					uint64_t latency = 0;
+					if (rx.timestamp_utc > 0 && now > rx.timestamp_utc) {
+						latency = now - rx.timestamp_utc;
+					}
+					px4_sem_wait(&peers_sem);
+					int idx = find_or_allocate_peer(rx.instance_id);
+					if (idx >= 0) {
+						PeerState &peer = peers[idx];
+						peer.score   = ekfScoreFromUorb(rx);
+						peer.last_rx = now;
+						if (latency > 0 && latency < 100000) {
+							peer.latency.update(latency);
+						} else {
+							peer.latency.lost_packages++;
+						}
+					}
+					px4_sem_post(&peers_sem);
 				}
 			}
-
-			px4_sem_post(&peers_sem);
 		}
-	}
-}
 
 		leader_id = elect_leader(self);
+
+		if (leader_id == _my_id) {
+			leader_publishable_info_s msg{};
+			msg.timestamp = hrt_absolute_time();
+
+			msg.instance_id = self.instance_id;
+
+			msg.vel_test = 4001;//self.vel_test; //4001 é valor pra teste
+			msg.pos_test = self.pos_test;
+			msg.hgt_test = self.hgt_test;
+			msg.hdg_test = self.hdg_test;
+
+			msg.pos_var = self.pos_var;
+			msg.vel_var = self.vel_var;
+
+			msg.ekf_flags = self.ekf_flags;
+			msg.nav_state = self.nav_state;
+			msg.timestamp_utc = self.timestamp_utc;
+
+			_leader_publishable_info_pub.publish(msg);
+			}
 
 		if (verbose) {
 			PX4_INFO("EU=%ld | LIDER=%ld",
@@ -294,7 +315,7 @@ public:
 		return leader_id;
 	}
 
-		void publish_ekf_score_uorb(const EkfScore &self)
+	void publish_ekf_score_uorb(const EkfScore &self)
 	{
 		ekf_score_s msg{};
 		msg.timestamp = hrt_absolute_time();
@@ -332,14 +353,17 @@ private:
 	uORB::Subscription _veh_sub{ORB_ID(vehicle_status)};
 	uORB::Subscription _lpos_sub{ORB_ID(vehicle_local_position)};
 	uORB::Subscription _gps_sub{ORB_ID(sensor_gps)};
-	uORB::Publication<ekf_score_s> _ekf_score_pub{ORB_ID(ekf_score)};
 
+	uORB::Publication<ekf_score_s> _ekf_score_pub{ORB_ID(ekf_score)};
+	uORB::Publication<leader_publishable_info_s> _leader_publishable_info_pub{ORB_ID(leader_publishable_info)};
+	uORB::Subscription _leader_publishable_info_sub{ORB_ID(leader_publishable_info)};
 
 	/* cache */
 	estimator_status_s est{};
 	vehicle_status_s veh{};
 	vehicle_local_position_s lpos{};
 	sensor_gps_s gps{};
+	leader_publishable_info_s leader_info{};
 
 	int32_t leader_id{-1};
 
@@ -349,6 +373,13 @@ private:
 	uORB::Subscription(ORB_ID(ekf_score), 0),
 	uORB::Subscription(ORB_ID(ekf_score), 1),
 	uORB::Subscription(ORB_ID(ekf_score), 2),
+	};
+	uORB::Subscription _leader_publishable_info_subs[MAX_EKF_INSTANCES] = {
+	uORB::Subscription(ORB_ID(leader_publishable_info), 0),
+	uORB::Subscription(ORB_ID(leader_publishable_info), 1),
+	uORB::Subscription(ORB_ID(leader_publishable_info), 2),
+	};
+
 };
 
 
@@ -356,7 +387,7 @@ private:
 
 
 
-};
+
 static SensorCanPublisher *g_instance{nullptr};
 
 extern "C" __EXPORT int sensor_can_publisher_main(int argc, char *argv[])
