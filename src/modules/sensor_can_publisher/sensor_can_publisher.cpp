@@ -52,7 +52,7 @@ class SensorCanPublisher :
 
 public:
 	SensorCanPublisher(int max_iter) :
-		ScheduledWorkItem(MODULE_NAME,px4::wq_configurations::hp_default),_max_iter(max_iter){}
+		ScheduledWorkItem(MODULE_NAME,px4::wq_configurations::nav_and_controllers),_max_iter(max_iter){}
 	int init()
 	{
 		param_t p_comm_id = param_find("SYS_PX4_COMM_ID");
@@ -72,7 +72,7 @@ public:
 		char px4guid_fmt_buffer[PX4_GUID_FORMAT_SIZE];
 
 		board_get_px4_guid_formated(px4guid_fmt_buffer, sizeof(px4guid_fmt_buffer));
-		PX4_INFO_RAW("PX4GUID: %s\n", px4guid_fmt_buffer);
+		//PX4_INFO_RAW("PX4GUID: %s\n", px4guid_fmt_buffer);
 		// 1. Encontrar o comprimento da string
 		int len = strlen(px4guid_fmt_buffer);
 
@@ -83,7 +83,7 @@ public:
 			// 3. Converter de Hexadecimal (base 16) para Inteiro
 			int last_six_int = (int)strtol(last_six_str, NULL, 16);
 
-			PX4_INFO("Last 6 hex as INT: %d", last_six_int);
+			//PX4_INFO("Last 6 hex as INT: %d", last_six_int);
 			param_set(p_comm_id, &last_six_int);
 			_my_id = last_six_int%256;
 		}
@@ -96,18 +96,7 @@ public:
 		//PX4_INFO("Board GUID: %s", guid);
 		//PX4_INFO("PX4_COMM_ID = %ld", (long)_my_id);
 
-		_tx_sock = socket(AF_INET, SOCK_DGRAM, 0);
-		if (_tx_sock < 0) {
-			PX4_ERR("socket creation failed");
-			return -1;
-		}
 
-		int enable = 1;
-		setsockopt(_tx_sock, SOL_SOCKET, SO_BROADCAST, &enable, sizeof(enable));
-
-		_dest.sin_family = AF_INET;
-		_dest.sin_port = htons(EKF_BROADCAST_PORT);
-		_dest.sin_addr.s_addr = inet_addr("255.255.255.255");
 
 		px4_sem_init(&peers_sem, 1, 1);
 
@@ -119,7 +108,8 @@ public:
 		}
 
 		PX4_INFO("sensor_can_publisher running");
-		ScheduleOnInterval(20000); // já agenda aqui 👍
+		//ScheduleOnInterval(20000); // já agenda aqui 👍
+		ScheduleNow();
 
 		return 0;
 	}
@@ -128,9 +118,6 @@ public:
 	{
 		local_stop();
 
-		if (_tx_sock >= 0) {
-			close(_tx_sock);
-		}
 
 
 	}
@@ -167,14 +154,7 @@ public:
 			_leader_publishable_info_sub.copy(&leader_info);
 		}
 
-		/* ---------- Timestamp ---------- */
 
-		timespec ts{};
-		px4_clock_gettime(CLOCK_REALTIME, &ts);
-
-		uint64_t tempo_real_us =
-			uint64_t(ts.tv_sec) * 1000000ULL +
-			uint64_t(ts.tv_nsec) / 1000ULL;
 
 		/* ---------- Monta mensagem ---------- */
 
@@ -192,16 +172,10 @@ public:
 
 		self.ekf_flags = est.solution_status_flags;
 		self.nav_state = veh.nav_state;
-		self.timestamp_utc = tempo_real_us;
+		self.timestamp_utc = hrt_absolute_time();
 
-		sendto(
-			_tx_sock,
-			&self,
-			sizeof(self),
-			0,
-			(sockaddr *)&_dest,
-			sizeof(_dest)
-			);
+
+
 
 		publish_ekf_score_uorb(self);
 		/* ---------- Leader election ---------- */
@@ -209,7 +183,7 @@ public:
 		for (int i = 0; i < MAX_EKF_INSTANCES; i++) {
 
 			if(_leader_publishable_info_subs[i].updated()){
-				;//_leader_publishable_info_subs[i].copy(&leader_info)	;
+				;//_leader_publishable_info_subs[i].copy(&leader_info)
 				}
 
 
@@ -220,12 +194,12 @@ public:
 					if (rx.instance_id == _my_id) {
 						continue;
 					}
-					PX4_INFO(
-						"RX ekf_score | uORB instance=%d | sender_id=%ld | vel_test=%f",
-						i,
-						(long)rx.instance_id,
-						(double)rx.vel_test
-					);
+					//PX4_INFO(
+					//	"RX ekf_score | uORB instance=%d | sender_id=%ld | vel_test=%f",
+					//	i,
+					//	(long)rx.instance_id,
+					//	(double)rx.vel_test
+					//);
 					uint64_t now = hrt_absolute_time();
 					uint64_t latency = 0;
 					if (rx.timestamp_utc > 0 && now > rx.timestamp_utc) {
@@ -271,12 +245,12 @@ public:
 			_leader_publishable_info_pub.publish(msg);
 			}
 
-		if (verbose) {
-			PX4_INFO("EU=%ld | LIDER=%ld",
-				(long)self.instance_id,
-				(long)leader_id
-			);
-		}
+		//if (verbose) {
+		//	PX4_INFO("EU=%ld | LIDER=%ld",
+		//		(long)self.instance_id,
+		//		(long)leader_id
+		//	);
+		//}
 
 		/* ---------- Controle de iteração ---------- */
 
@@ -287,7 +261,9 @@ public:
 		}
 
 		/* ---------- Reagenda ---------- */
-		ScheduleOnInterval(20000); // ~50Hz
+		//ScheduleOnInterval(20000); // ~50Hz
+		ScheduleDelayed(20000);
+
 	}
 
 
@@ -342,8 +318,7 @@ private:
 	int _count{0};
 
 	int32_t _my_id{-1};
-	int _tx_sock{-1};
-	sockaddr_in _dest{};
+
 
 	SensorCanRx *_rx{nullptr};
 
