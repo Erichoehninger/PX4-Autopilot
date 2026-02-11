@@ -21,6 +21,8 @@
 #include <uORB/topics/sensor_gps.h>
 #include <uORB/topics/ekf_score.h>
 #include <uORB/topics/leader_publishable_info.h>
+//#include <uORB/topics/estimator_global_position.h>
+
 
 
 #include <unistd.h>
@@ -232,7 +234,7 @@ public:
 
 			msg.instance_id = self.instance_id;
 
-			msg.vel_test = 4001;//self.vel_test; //4001 é valor pra teste
+			msg.vel_test = self.vel_test; //4001 é valor pra teste
 			msg.pos_test = self.pos_test;
 			msg.hgt_test = self.hgt_test;
 			msg.hdg_test = self.hdg_test;
@@ -300,7 +302,7 @@ public:
 
 		msg.instance_id = self.instance_id;
 
-		msg.vel_test = 4001;//self.vel_test; //4001 é valor pra teste
+		msg.vel_test = self.vel_test; //4001 é valor pra teste
 		msg.pos_test = self.pos_test;
 		msg.hgt_test = self.hgt_test;
 		msg.hdg_test = self.hdg_test;
@@ -330,7 +332,8 @@ private:
 	uORB::Subscription _veh_sub{ORB_ID(vehicle_status)};
 	uORB::Subscription _lpos_sub{ORB_ID(vehicle_local_position)};
 	uORB::Subscription _gps_sub{ORB_ID(sensor_gps)};
-	//incluir estimator_global_position quando conectar GPS na Pixhawk
+	//uORB::Subscription _global_pos_sub{ORB_ID(estimator_global_position)};
+
 
 	uORB::Publication<ekf_score_s> _ekf_score_pub{ORB_ID(ekf_score)};
 	uORB::Publication<leader_publishable_info_s> _leader_publishable_info_pub{ORB_ID(leader_publishable_info)};
@@ -341,6 +344,7 @@ private:
 	vehicle_status_s veh{};
 	vehicle_local_position_s lpos{};
 	sensor_gps_s gps{};
+	//estimator_global_position_s global_pos{};
 	leader_publishable_info_s leader_info{};
 
 	int32_t leader_id{-1};
@@ -357,6 +361,7 @@ private:
 	uORB::Subscription(ORB_ID(leader_publishable_info), 1),
 	uORB::Subscription(ORB_ID(leader_publishable_info), 2),
 	};
+
 
 };
 

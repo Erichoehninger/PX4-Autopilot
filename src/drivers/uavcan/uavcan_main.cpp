@@ -1188,6 +1188,18 @@ UavcanNode::print_info()
 		}
 	}
 
+	printf("\nUAVCAN time synchronization:\n");
+
+	printf("\tSlave active: %s\n",_time_sync_slave.isActive() ? "YES" : "NO");
+	printf("\tSlave suppressed: %s\n",_time_sync_slave.isSuppressed() ? "YES" : "NO");
+	if (_time_sync_slave.isActive()) {
+		printf("\tMaster Node ID: %u\n",
+		unsigned(_time_sync_slave.getMasterNodeID().get()));
+	} else {
+		printf("\tMaster Node ID: none\n");
+	}
+
+
 	printf("\n");
 
 #if defined(CONFIG_UAVCAN_OUTPUTS_CONTROLLER)
