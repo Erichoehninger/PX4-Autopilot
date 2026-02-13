@@ -1195,6 +1195,7 @@ UavcanNode::print_info()
 	if (_time_sync_slave.isActive()) {
 		printf("\tMaster Node ID: %u\n",
 		unsigned(_time_sync_slave.getMasterNodeID().get()));
+		printf("\tLast sync time: %" PRIu64 " us\n", _time_sync_slave.getLastAdjustmentTime().toUSec());
 	} else {
 		printf("\tMaster Node ID: none\n");
 	}

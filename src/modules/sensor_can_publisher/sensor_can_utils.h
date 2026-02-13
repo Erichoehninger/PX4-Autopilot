@@ -42,17 +42,20 @@ struct LatencyStats {
 	uint64_t sum_us{0};
 	uint32_t samples{0};
 	uint32_t lost_packages{0};
+	constexpr static int MAX_SAMPLES = 1000;
 
 	void update(uint64_t latency_us)
 	{
-		if (latency_us < min_us) {
-			min_us = latency_us;
+		if (samples >= MAX_SAMPLES) {
+			// reset suave
+			samples = 0;
+			sum_us = 0;
+			min_us = UINT64_MAX;
+			max_us = 0;
 		}
 
-		if (latency_us > max_us) {
-			max_us = latency_us;
-		}
-
+		min_us = math::min(min_us, latency_us);
+		max_us = math::max(max_us, latency_us);
 		sum_us += latency_us;
 		samples++;
 	}
@@ -60,7 +63,7 @@ struct LatencyStats {
 	void print(int32_t peer_id) const
 	{
 		if (samples == 0) {
-			//PX4_INFO("Peer %ld: no latency samples collected", (long)peer_id);
+			PX4_INFO("Peer %ld: no latency samples collected", (long)peer_id);
 			return;
 		}
 

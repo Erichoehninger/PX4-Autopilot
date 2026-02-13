@@ -557,8 +557,8 @@ void MavlinkReceiver::handle_message_command_both(mavlink_message_t *msg, const 
 	if (!target_ok) {
 		if (!_mavlink.get_forwarding_on()
 		    || !_mavlink.component_was_seen(cmd_mavlink.target_system, cmd_mavlink.target_component, _mavlink)) {
-			PX4_INFO("Ignore command %d from %d/%d to %d/%d",
-				 cmd_mavlink.command, msg->sysid, msg->compid, cmd_mavlink.target_system, cmd_mavlink.target_component);
+			//PX4_INFO("Ignore command %d from %d/%d to %d/%d",
+			//	 cmd_mavlink.command, msg->sysid, msg->compid, cmd_mavlink.target_system, cmd_mavlink.target_component);
 		}
 
 		return;

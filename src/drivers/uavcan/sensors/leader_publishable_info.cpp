@@ -32,22 +32,31 @@ void UavcanLeaderPublishableInfoBridge::leader_publishable_info_cb(
 		globaldrones::LeaderPublishableInfo> &msg)
 {
 	leader_publishable_info_s s{};
-	s.timestamp = hrt_absolute_time();
-
 	s.instance_id = msg.instance_id;
+	s.timestamp = hrt_absolute_time();
+	s.timestamp_sample = msg.timestamp_sample;
+	s.pose_frame     = msg.pose_frame;
+	s.velocity_frame = msg.velocity_frame;
+	for (int i = 0; i < 3; i++) {
+		s.position[i] = msg.position[i];
+	}
+	for (int i = 0; i < 4; i++) {
+		s.q[i] = msg.q[i];
+	}
+	for (int i = 0; i < 3; i++) {
+		s.velocity[i]         = msg.velocity[i];
+		s.angular_velocity[i] = msg.angular_velocity[i];
+	}
 
-	s.vel_test = msg.vel_test;
-	s.pos_test = msg.pos_test;
-	s.hgt_test = msg.hgt_test;
-	s.hdg_test = msg.hdg_test;
+	// variances
+	for (int i = 0; i < 3; i++) {
+		s.position_variance[i]    = msg.position_variance[i];
+		s.orientation_variance[i] = msg.orientation_variance[i];
+		s.velocity_variance[i]    = msg.velocity_variance[i];
+	}
 
-	s.pos_var = msg.pos_var;
-	s.vel_var = msg.vel_var;
-
-	s.ekf_flags = msg.ekf_flags;
-	s.nav_state = msg.nav_state;
-
-	s.timestamp_utc = msg.timestamp_utc;
+	s.reset_counter = msg.reset_counter;
+	s.quality       = msg.quality;
 
 	_leader_publishable_info_pub.publish(s);
 }
@@ -85,22 +94,33 @@ void UavcanLeaderPublishableInfoTxBridge::update()
 
 	msg.instance_id = s.instance_id;
 
-	msg.vel_test = s.vel_test;
-	msg.pos_test = s.pos_test;
-	msg.hgt_test = s.hgt_test;
-	msg.hdg_test = s.hdg_test;
+	msg.timestamp = s.timestamp;
+	msg.timestamp_sample = s.timestamp_sample;
+	msg.pose_frame = s.pose_frame;
+	msg.velocity_frame = s.velocity_frame;
+	for (int i = 0; i < 3; i++) {
+		msg.position[i] = s.position[i];
+	}
+	for (int i = 0; i < 4; i++) {
+		msg.q[i] = s.q[i];
+	}
+	for (int i = 0; i < 3; i++) {
+		msg.velocity[i]         = s.velocity[i];
+		msg.angular_velocity[i] = s.angular_velocity[i];
+	}
 
-	msg.pos_var = s.pos_var;
-	msg.vel_var = s.vel_var;
+	// variances
+	for (int i = 0; i < 3; i++) {
+		msg.position_variance[i]    = s.position_variance[i];
+		msg.orientation_variance[i] = s.orientation_variance[i];
+		msg.velocity_variance[i]    = s.velocity_variance[i];
+	}
 
-	msg.ekf_flags = s.ekf_flags;
-	msg.nav_state = s.nav_state;
-
-	msg.timestamp_utc = s.timestamp_utc;
-
+	msg.reset_counter = s.reset_counter;
+	msg.quality       = s.quality;
 	int res = _pub.broadcast(msg);
 
-	PX4_WARN("LeaderPublishableInfo CAN publish res: %d", res);
+	//PX4_WARN("LeaderPublishableInfo CAN publish res: %d", res);
 
 	if (res < 0) {
 		PX4_WARN("LeaderPublishableInfo CAN publish failed: %d", res);
