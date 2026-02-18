@@ -87,6 +87,7 @@
 #include <uORB/topics/vehicle_odometry.h>
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/yaw_estimator_status.h>
+#include <uORB/topics/leader_publishable_info.h>
 
 #if defined(CONFIG_EKF2_AIRSPEED)
 # include <uORB/topics/airspeed.h>
@@ -169,6 +170,10 @@ private:
 
 	void PublishAidSourceStatus(const hrt_abstime &timestamp);
 	void PublishAttitude(const hrt_abstime &timestamp);
+
+	/*provavelmente vai precisar fazer varredura pelas
+	instancias de lider e só pegar aque postou mais recentemente*/
+	uORB::Subscription _leader_publishable_info_sub{ORB_ID(leader_publishable_info), 1};
 
 #if defined(CONFIG_EKF2_BAROMETER)
 	void PublishBaroBias(const hrt_abstime &timestamp);

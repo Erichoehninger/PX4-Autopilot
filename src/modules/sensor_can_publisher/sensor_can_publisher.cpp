@@ -257,7 +257,7 @@ public:
 			}
 
 			msg_lpi.reset_counter = odm.reset_counter;
-			msg_lpi.quality       = odm.quality;
+			msg_lpi.quality       = 1;//odm.quality;
 
 			_leader_publishable_info_pub.publish(msg_lpi);
 			}

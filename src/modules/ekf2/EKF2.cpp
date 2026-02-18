@@ -2207,11 +2207,11 @@ void EKF2::UpdateBaroSample(ekf2_timestamps_s &ekf2_timestamps)
 bool EKF2::UpdateExtVisionSample(ekf2_timestamps_s &ekf2_timestamps)
 {
 	// EKF external vision sample
-	bool new_ev_odom = false;
+	bool new_ev_odom = true;
 
-	vehicle_odometry_s ev_odom;
+	leader_publishable_info_s ev_odom;
 
-	if (_ev_odom_sub.update(&ev_odom)) {
+	if (_leader_publishable_info_sub.update(&ev_odom)) {
 
 		extVisionSample ev_data{};
 		ev_data.pos.setNaN();
