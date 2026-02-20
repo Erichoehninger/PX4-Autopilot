@@ -41,6 +41,7 @@
 #include "sensor_can_rx.h"
 #include <px4_platform_common/px4_config.h>
 #include <px4_platform_common/board_common.h>
+#include <perf/perf_counter.h>
 
 
 
@@ -58,6 +59,8 @@ public:
 		ScheduledWorkItem(MODULE_NAME,px4::wq_configurations::hp_default),_max_iter(max_iter){}
 	int init()
 	{
+		_loop_perf = perf_alloc(PC_ELAPSED, MODULE_NAME": loop");
+
 		param_t p_comm_id = param_find("SYS_PX4_COMM_ID");
 
 		if (p_comm_id == PARAM_INVALID) {
@@ -122,14 +125,28 @@ public:
 	~SensorCanPublisher()
 	{
 		local_stop();
-
+		perf_free(_loop_perf);
 
 
 	}
 
+	int print_status()
+	{
+	//px4_sem_wait(&_peers_sem);
+
+	for (int i = 0; i < MAX_PEERS; i++) {
+		int32_t id = peer_ids[i];
+		peers[i].latency.print(id);
+	}
+	return 0;
+	//px4_sem_post(&_peers_sem);
+	}
+
+
 
 	void Run()
 	{
+		perf_begin(_loop_perf);
 		if (should_exit()) {
 			PX4_INFO("Stopping work item");
 			ScheduleClear();
@@ -211,7 +228,7 @@ public:
 
 
 
-					px4_sem_wait(&peers_sem);
+					//px4_sem_wait(&peers_sem);
 					int idx = find_or_allocate_peer(rx.instance_id);
 					if (idx >= 0) {
 						PeerState &peer = peers[idx];
@@ -224,12 +241,12 @@ public:
 							peer.latency.lost_packages++;
 						}
 					}
-					px4_sem_post(&peers_sem);
+					//px4_sem_post(&peers_sem);
 				}
 			}
 
 		}
-
+		remove_stale_peers();
 		leader_id = elect_leader(self);
 
 		if (leader_id == _my_id) {
@@ -280,6 +297,7 @@ public:
 		/* ---------- Reagenda ---------- */
 		//ScheduleOnInterval(20000); // ~50Hz
 		//ScheduleDelayed(20000);
+		perf_end(_loop_perf);
 
 	}
 
@@ -294,10 +312,10 @@ public:
 		usleep(20000);
 		px4_sem_destroy(&peers_sem);
 
-		if (_rx) {
-			delete _rx;
-			_rx = nullptr;
-		}
+		//if (_rx) {
+		//	delete _rx;
+		//	_rx = nullptr;
+		//}
 	}
 
 
@@ -332,11 +350,37 @@ public:
 		_ekf_score_pub.publish(msg_ekfs);
 	}
 
+	void remove_stale_peers()
+	{
+	uint64_t now = hrt_absolute_time();
+
+	for (int i = 0; i < MAX_PEERS; i++) {
+
+		if (peer_ids[i] < 0) {
+		continue;
+		}
+
+		uint64_t age = now - peers[i].last_rx;
+
+		if (age > PEER_TIMEOUT_US) {
+
+		PX4_WARN("Peer %" PRId32 " timed out (%.2f ms)",
+			peer_ids[i],
+			(double)age / 1000.0);
+
+		peer_ids[i] = -1;
+		peers[i] = PeerState{}; //reseta estado
+
+		}
+	}
+	}
+
 private:
 	int _max_iter{-1};
 	int _count{0};
 
 	int32_t _my_id{-1};
+	static constexpr uint64_t PEER_TIMEOUT_US = 50000; // 50 ms
 
 
 	SensorCanRx *_rx{nullptr};
@@ -366,6 +410,7 @@ private:
 	leader_publishable_info_s leader_info{};
 
 	int32_t leader_id{-1};
+	perf_counter_t _loop_perf{nullptr};
 
 	static constexpr int MAX_EKF_INSTANCES = 3;
 
@@ -434,9 +479,7 @@ extern "C" __EXPORT int sensor_can_publisher_main(int argc, char *argv[])
 	if (!strcmp(argv[1], "stop")) {
 		if (g_instance) {
 			PX4_INFO("Stopping sensor_can_publisher");
-
-			g_instance->local_stop();
-			delete g_instance;
+			delete g_instance; //delete já invoca o destrutor.
 			g_instance = nullptr;
 		} else {
 			PX4_WARN("sensor_can_publisher not running");
@@ -449,15 +492,8 @@ extern "C" __EXPORT int sensor_can_publisher_main(int argc, char *argv[])
 	if (!strcmp(argv[1], "status")) {
 		if (g_instance) {
 			PX4_INFO("sensor_can_publisher is running");
-			px4_sem_wait(&peers_sem);
-				for (int i = 0; i < MAX_PEERS; i++) {
-					int32_t id = peer_ids[i];
-					peers[i].latency.print(id);
-				}
-
-			px4_sem_post(&peers_sem);
-
-			PX4_INFO("Eu: %ld | Líder Atual: %ld", (long)g_instance->get_my_id(), (long)g_instance->get_leader_id());
+			g_instance->print_status();
+			PX4_INFO("Eu: %ld | Lider Atual: %ld", (long)g_instance->get_my_id(), (long)g_instance->get_leader_id());
 		} else {
 			PX4_INFO("sensor_can_publisher is stopped");
 

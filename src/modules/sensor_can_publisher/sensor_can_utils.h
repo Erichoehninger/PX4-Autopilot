@@ -10,6 +10,7 @@
 #include <uORB/uORB.h>
 
 #define EKF_BROADCAST_PORT 14560
+#define EKF_SCORE_TIMEOUT 200000 // 200 ms
 
 
 
@@ -142,15 +143,15 @@ inline float compute_score(const EkfScore &s)
 	return static_cast<float>(s.instance_id);
 
 	// score real (quando quiser ativar)
-	/*
-	return
+
+	return static_cast<float>(
 		1.0f * s.vel_test +
 		1.0f * s.pos_test +
 		0.5f * s.hgt_test +
 		0.5f * s.hdg_test +
 		0.2f * s.pos_var +
-		0.2f * s.vel_var;
-	*/
+		0.2f * s.vel_var);
+
 }
 
 inline int32_t elect_leader(const EkfScore &self)
@@ -162,7 +163,7 @@ inline int32_t elect_leader(const EkfScore &self)
 	int32_t best_id = self.instance_id;
 
 
-	px4_sem_wait(&peers_sem);
+	//px4_sem_wait(&peers_sem);
 
 		for (int i = 0; i < MAX_PEERS; i++) {
 
@@ -184,7 +185,7 @@ inline int32_t elect_leader(const EkfScore &self)
 				best_id = id;
 			}
 		}
-	px4_sem_post(&peers_sem);
+	//px4_sem_post(&peers_sem);
 
 
 	return best_id;
