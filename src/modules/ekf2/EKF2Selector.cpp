@@ -291,7 +291,8 @@ bool EKF2Selector::UpdateErrorScores()
 				status.hgt_test_ratio = 1.f;
 			}
 
-			float combined_test_ratio = fmaxf(0.5f * (status.vel_test_ratio + status.pos_test_ratio), status.hgt_test_ratio);
+			float combined_test_ratio = fmaxf(fmaxf(status.vel_test_ratio, status.pos_test_ratio), status.hgt_test_ratio); //alteração conforme erich pediu
+			//float combined_test_ratio = fmaxf(0.5f * (status.vel_test_ratio + status.pos_test_ratio), status.hgt_test_ratio);
 
 			_instance[i].combined_test_ratio = combined_test_ratio;
 

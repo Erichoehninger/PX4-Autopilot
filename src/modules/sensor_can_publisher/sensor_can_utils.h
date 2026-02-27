@@ -144,13 +144,13 @@ inline float compute_score(const EkfScore &s)
 
 	// score real (quando quiser ativar)
 
-	return static_cast<float>(
-		1.0f * s.vel_test +
-		1.0f * s.pos_test +
-		0.5f * s.hgt_test +
-		0.5f * s.hdg_test +
-		0.2f * s.pos_var +
-		0.2f * s.vel_var);
+	//return static_cast<float>(
+	//	1.0f * s.vel_test +
+	//	1.0f * s.pos_test +
+	//	0.5f * s.hgt_test +
+	//	0.5f * s.hdg_test +
+	//	0.2f * s.pos_var +
+	//	0.2f * s.vel_var);
 
 }
 

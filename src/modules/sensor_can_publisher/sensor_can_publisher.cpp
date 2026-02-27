@@ -152,141 +152,21 @@ public:
 			ScheduleClear();
 			return;
 		}
-
-
-
-		/* ---------- uORB ---------- */
-
-		if (_est_sub.updated()) {
-			_est_sub.copy(&est);
-		}
-
-		if (_veh_sub.updated()) {
-			_veh_sub.copy(&veh);
-		}
-
-		if (_lpos_sub.updated()) {
-			_lpos_sub.copy(&lpos);
-		}
-
-		if (_gps_sub.updated()) {
-			_gps_sub.copy(&gps);
-		}
-		if(_leader_publishable_info_sub.updated()) {
-			_leader_publishable_info_sub.copy(&leader_info);
-		}
-		if(_veh_odm.updated()) {
-			_veh_odm.copy(&odm);
-		}
-
-
-
-		/* ---------- Monta mensagem ---------- */
-
 		EkfScore self{};
-		self.instance_id = _my_id;
-
-		self.vel_test = est.vel_test_ratio;
-		self.pos_test = est.pos_test_ratio;
-		self.hgt_test = est.hgt_test_ratio;
-		self.hdg_test = est.hdg_test_ratio;
 
 
-		self.pos_var = lpos.eph;
-		self.vel_var = lpos.evh;
-
-		self.ekf_flags = est.solution_status_flags;
-		self.nav_state = veh.nav_state;
-		self.timestamp_utc = hrt_absolute_time();
-
-
-
-
+		update_uorb_subs();
+		montar_mensage(self);
 		publish_ekf_score_uorb(self);
-		/* ---------- Leader election ---------- */
-		//int count = 0;
-		for (int i = 0; i < MAX_EKF_INSTANCES; i++) {
-
-			if(_leader_publishable_info_subs[i].updated()){
-				_leader_publishable_info_subs[i].copy(&leader_info);
-				}
-
-
-			if (_ekf_score_subs[i].updated()) {
-
-				if (_ekf_score_subs[i].copy(&rx)) {
-
-					// ignora mensagem própria
-					if (rx.instance_id == _my_id) {
-						continue;
-					}
-
-					uint64_t rx_time = hrt_absolute_time();
-
-					uint64_t latency = rx_time - rx.timestamp;
-
-
-
-
-					//px4_sem_wait(&peers_sem);
-					int idx = find_or_allocate_peer(rx.instance_id);
-					if (idx >= 0) {
-						PeerState &peer = peers[idx];
-						peer.score   = ekfScoreFromUorb(rx);
-						peer.last_rx = rx_time;
-
-						if (latency < 10000000) {
-							peer.latency.update(latency);
-						} else {
-							peer.latency.lost_packages++;
-						}
-					}
-					//px4_sem_post(&peers_sem);
-				}
-			}
-
-		}
+		update_local_peers();
+		handle_leader_duties();
 		remove_stale_peers();
 		leader_id = elect_leader(self);
 
 		if (leader_id == _my_id) {
-			msg_lpi.instance_id = self.instance_id;
-			msg_lpi.timestamp = hrt_absolute_time();
-			msg_lpi.timestamp_sample = odm.timestamp_sample;
-			msg_lpi.pose_frame     = odm.pose_frame;
-			msg_lpi.velocity_frame = odm.velocity_frame;
-			for (int i = 0; i < 3; i++) {
-				msg_lpi.position[i] = odm.position[i];
-			}
-			for (int i = 0; i < 4; i++) {
-				msg_lpi.q[i] = odm.q[i];
-			}
-			for (int i = 0; i < 3; i++) {
-				msg_lpi.velocity[i]         = odm.velocity[i];
-				msg_lpi.angular_velocity[i] = odm.angular_velocity[i];
+
 			}
 
-			// variances
-			for (int i = 0; i < 3; i++) {
-				msg_lpi.position_variance[i]    = odm.position_variance[i];
-				msg_lpi.orientation_variance[i] = odm.orientation_variance[i];
-				msg_lpi.velocity_variance[i]    = odm.velocity_variance[i];
-			}
-
-			msg_lpi.reset_counter = odm.reset_counter;
-			msg_lpi.quality       = 1;//odm.quality;
-
-			_leader_publishable_info_pub.publish(msg_lpi);
-			}
-
-		//if (verbose) {
-		//	PX4_INFO("EU=%ld | LIDER=%ld",
-		//		(long)self.instance_id,
-		//		(long)leader_id
-		//	);
-		//}
-
-		/* ---------- Controle de iteração ---------- */
 
 		if (_max_iter >= 0 && ++_count >= _max_iter) {
 			//request_stop();
@@ -318,7 +198,111 @@ public:
 		//}
 	}
 
+	void update_uorb_subs(){
 
+		if (_est_sub.updated()) {
+			_est_sub.copy(&est);
+		}
+
+		if (_veh_sub.updated()) {
+			_veh_sub.copy(&veh);
+		}
+
+		if (_lpos_sub.updated()) {
+			_lpos_sub.copy(&lpos);
+		}
+
+		if (_gps_sub.updated()) {
+			_gps_sub.copy(&gps);
+		}
+		if(_leader_publishable_info_sub.updated()) {
+			_leader_publishable_info_sub.copy(&leader_info);
+		}
+		if(_veh_odm.updated()) {
+			_veh_odm.copy(&odm);
+		}
+	}
+
+	void montar_mensage(EkfScore &self){
+		self.instance_id = _my_id;
+
+		self.vel_test = est.vel_test_ratio;
+		self.pos_test = est.pos_test_ratio;
+		self.hgt_test = est.hgt_test_ratio;
+		self.hdg_test = est.hdg_test_ratio;
+
+
+		self.pos_var = lpos.eph;
+		self.vel_var = lpos.evh;
+
+		self.ekf_flags = est.solution_status_flags;
+		self.nav_state = veh.nav_state;
+		self.timestamp_utc = hrt_absolute_time();
+	}
+
+	void update_local_peers(){
+		for (int i = 0; i < MAX_EKF_INSTANCES; i++) {
+			if(_leader_publishable_info_subs[i].updated())
+			{
+				_leader_publishable_info_subs[i].copy(&leader_info);
+			}
+			if (_ekf_score_subs[i].updated())
+			{
+
+				if (_ekf_score_subs[i].copy(&rx)) {
+
+					// ignora mensagem própria
+					if (rx.instance_id == _my_id) {
+						continue;
+					}
+					uint64_t rx_time = hrt_absolute_time();
+					uint64_t latency = rx_time - rx.timestamp;
+					//px4_sem_wait(&peers_sem);
+					int idx = find_or_allocate_peer(rx.instance_id);
+					if (idx >= 0) {
+						PeerState &peer = peers[idx];
+						peer.score   = ekfScoreFromUorb(rx);
+						peer.last_rx = rx_time;
+
+						if (latency < 10000000) {
+							peer.latency.update(latency);
+						} else {
+							peer.latency.lost_packages++;
+						}
+					}
+					//px4_sem_post(&peers_sem);
+				}
+			}
+
+		}
+	}
+
+	void handle_leader_duties(){
+		msg_lpi.instance_id = _my_id;
+		msg_lpi.timestamp = hrt_absolute_time();
+		msg_lpi.timestamp_sample = odm.timestamp_sample;
+		msg_lpi.pose_frame     = odm.pose_frame;
+		msg_lpi.velocity_frame = odm.velocity_frame;
+		for (int i = 0; i < 3; i++) {
+			msg_lpi.position[i] = odm.position[i];
+		}
+		for (int i = 0; i < 4; i++) {
+			msg_lpi.q[i] = odm.q[i];
+		}
+		for (int i = 0; i < 3; i++) {
+			msg_lpi.velocity[i]         = odm.velocity[i];
+			msg_lpi.angular_velocity[i] = odm.angular_velocity[i];
+		}
+		// variances
+		for (int i = 0; i < 3; i++) {
+			msg_lpi.position_variance[i]    = odm.position_variance[i];
+			msg_lpi.orientation_variance[i] = odm.orientation_variance[i];
+			msg_lpi.velocity_variance[i]    = odm.velocity_variance[i];
+		}
+		msg_lpi.reset_counter = odm.reset_counter;
+		msg_lpi.quality       = 1;//odm.quality;
+		_leader_publishable_info_pub.publish(msg_lpi);
+	}
 
 	int32_t get_my_id() const {
 		return _my_id;
