@@ -159,12 +159,11 @@ public:
 		montar_mensage(self);
 		publish_ekf_score_uorb(self);
 		update_local_peers();
-		handle_leader_duties();
 		remove_stale_peers();
 		leader_id = elect_leader(self);
 
 		if (leader_id == _my_id) {
-
+			handle_leader_duties();
 			}
 
 
@@ -319,7 +318,7 @@ public:
 
 		msg_ekfs.instance_id = self.instance_id;
 
-		msg_ekfs.vel_test = self.vel_test; //4001 é valor pra teste
+		msg_ekfs.vel_test = self.vel_test;
 		msg_ekfs.pos_test = self.pos_test;
 		msg_ekfs.hgt_test = self.hgt_test;
 		msg_ekfs.hdg_test = self.hdg_test;
