@@ -61,7 +61,19 @@ public:
 	{
 		_loop_perf = perf_alloc(PC_ELAPSED, MODULE_NAME": loop");
 
+		param_t p_comm_id = param_find("SYS_PX4_COMM_ID");
 
+		if (p_comm_id == PARAM_INVALID) {
+			PX4_ERR("SYS_PX4_COMM_ID param not found");
+			return -1;
+		}
+
+		param_get(p_comm_id, &_my_id);
+
+		if (_my_id < 0) {
+			PX4_ERR("SYS_PX4_COMM_ID not set or invalid");
+			return -1;
+		}
 
 		char px4guid_fmt_buffer[PX4_GUID_FORMAT_SIZE];
 
@@ -80,20 +92,6 @@ public:
 			//PX4_INFO("Last 6 hex as INT: %d", last_six_int);
 			param_set(p_comm_id, &last_six_int);
 			_my_id = last_six_int%256;
-
-			param_t p_comm_id = param_find("SYS_PX4_COMM_ID");
-
-			if (p_comm_id == PARAM_INVALID) {
-				PX4_ERR("SYS_PX4_COMM_ID param not found");
-				return -1;
-			}
-
-			param_get(p_comm_id, &_my_id);
-
-			if (_my_id < 0) {
-				PX4_ERR("SYS_PX4_COMM_ID not set or invalid");
-				return -1;
-			}
 		}
 		else {PX4_ERR("GUID string too short");}
 		//char guid[PX4_GUID_FORMAT_SIZE];

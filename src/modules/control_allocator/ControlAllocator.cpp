@@ -61,6 +61,10 @@ ControlAllocator::ControlAllocator() :
 	_actuator_servos_pub.advertise();
 	_actuator_servos_trim_pub.advertise();
 
+	param_get(param_find("SYS_PX4_COMM_ID"), &_my_id);
+	_my_id = _my_id%256; // limit to 255, as we use uint8_t for the ID in leader_publishable_info
+
+
 	for (int i = 0; i < MAX_NUM_MOTORS; ++i) {
 		char buffer[17];
 		snprintf(buffer, sizeof(buffer), "CA_R%u_SLEW", i);
@@ -443,7 +447,19 @@ ControlAllocator::Run()
 	}
 
 	// Publish actuator setpoint and allocator status
-	publish_actuator_controls();
+	static int32_t current_leader_id = -1;
+
+	for (int i = 0; i < 3; i++) { // 3 = MAX_NUM_INSTANCES of leader_publishable_info
+		if(_leader_publishable_info_subs[i].updated())
+		{
+			_leader_publishable_info_subs[i].copy(&_leader_publishable_info);
+			current_leader_id = _leader_publishable_info.instance_id;
+		}
+	}
+	if(current_leader_id == _my_id){
+		publish_actuator_controls();
+	}
+
 
 	// Publish status at limited rate, as it's somewhat expensive and we use it for slower dynamics
 	// (i.e. anti-integrator windup)
@@ -677,6 +693,7 @@ ControlAllocator::publish_actuator_controls()
 		int selected_matrix = _control_allocation_selection_indexes[actuator_idx];
 		float actuator_sp = _control_allocation[selected_matrix]->getActuatorSetpoint()(actuator_idx_matrix[selected_matrix]);
 		actuator_motors.control[motors_idx] = PX4_ISFINITE(actuator_sp) ? actuator_sp : NAN;
+		actuator_motors.control[motors_idx] = 0.5;//(_my_id%10)/10; //TODO: COMENTAR ESSA LINHA INTEIRA DEPOIS É SÓ PRA TESTE DO CAN.
 
 		if (stopped_motors & (1u << motors_idx)) {
 			actuator_motors.control[motors_idx] = NAN;
@@ -687,7 +704,7 @@ ControlAllocator::publish_actuator_controls()
 	}
 
 	for (int i = motors_idx; i < actuator_motors_s::NUM_CONTROLS; i++) {
-		actuator_motors.control[i] = NAN;
+		actuator_motors.control[i] = //NAN;
 	}
 
 	_actuator_motors_pub.publish(actuator_motors);

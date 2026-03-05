@@ -87,6 +87,7 @@
 #include "sensors/ekf_score.hpp"
 #include "sensors/leader_publishable_info.hpp"
 
+
 #include <lib/drivers/device/Device.hpp>
 #include <lib/mixer_module/mixer_module.hpp>
 #include <lib/perf/perf_counter.h>
@@ -109,6 +110,7 @@
 #include <uORB/topics/uavcan_parameter_request.h>
 #include <uORB/topics/uavcan_parameter_value.h>
 #include <uORB/topics/vehicle_command_ack.h>
+#include <uORB/topics/actuator_motors.h>
 
 
 using namespace time_literals;

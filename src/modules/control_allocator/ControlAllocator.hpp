@@ -59,6 +59,16 @@
 #include <ControlAllocationPseudoInverse.hpp>
 #include <ControlAllocationSequentialDesaturation.hpp>
 
+#include <px4_platform_common/log.h>
+#include <px4_platform_common/module.h>
+#include <px4_platform_common/posix.h>
+#include <px4_platform_common/time.h>
+#include <px4_platform_common/px4_work_queue/ScheduledWorkItem.hpp>
+#include <parameters/param.h>
+#include <drivers/drv_hrt.h>
+#include <px4_platform_common/px4_config.h>
+#include <px4_platform_common/board_common.h>
+
 #include <lib/matrix/matrix/math.hpp>
 #include <lib/perf/perf_counter.h>
 #include <px4_platform_common/px4_config.h>
@@ -79,6 +89,7 @@
 #include <uORB/topics/vehicle_thrust_setpoint.h>
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/failure_detector_status.h>
+#include <uORB/topics/leader_publishable_info.h>
 
 class ControlAllocator : public ModuleBase<ControlAllocator>, public ModuleParams, public px4::ScheduledWorkItem
 {
@@ -193,6 +204,16 @@ private:
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
 	uORB::Subscription _vehicle_control_mode_sub{ORB_ID(vehicle_control_mode)};
 	uORB::Subscription _failure_detector_status_sub{ORB_ID(failure_detector_status)};
+	uORB::Subscription _leader_publishable_info_sub{ORB_ID(leader_publishable_info)};
+	leader_publishable_info_s _leader_publishable_info{};
+	uORB::Subscription _leader_publishable_info_subs[3] = {
+	uORB::Subscription(ORB_ID(leader_publishable_info), 0),
+	uORB::Subscription(ORB_ID(leader_publishable_info), 1),
+	uORB::Subscription(ORB_ID(leader_publishable_info), 2),};
+
+
+	int32_t _leader_id;
+	int32_t _my_id;
 
 	matrix::Vector3f _torque_sp;
 	matrix::Vector3f _thrust_sp;
