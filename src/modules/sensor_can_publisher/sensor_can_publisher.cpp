@@ -22,6 +22,7 @@
 #include <uORB/topics/ekf_score.h>
 #include <uORB/topics/leader_publishable_info.h>
 #include <uORB/topics/vehicle_odometry.h>
+#include <uORB/topics/actuator_test.h>
 //#include <uORB/topics/estimator_global_position.h>
 
 
@@ -357,6 +358,36 @@ public:
 		}
 	}
 	}
+	void test_esc(float value, float duration_s)
+{
+	actuator_test_s msg{};
+	msg.timestamp = hrt_absolute_time();
+
+	// motor 1 (pode parametrizar depois)
+	msg.function = actuator_test_s::FUNCTION_MOTOR1;
+	// motor 2 ESC ATUAL TA COM ID = 2
+	msg.function = actuator_test_s::FUNCTION_MOTOR1 +1;
+
+	msg.value = value;
+
+	if (duration_s <= 0.f) {
+		msg.action = actuator_test_s::ACTION_RELEASE_CONTROL;
+		msg.timeout_ms = 0;
+
+	} else {
+		msg.action = actuator_test_s::ACTION_DO_CONTROL;
+		msg.timeout_ms = (int)(duration_s * 1000.f);
+
+		// limite de segurança igual ao PX4
+		if (msg.timeout_ms > 3000) {
+			msg.timeout_ms = 3000;
+		}
+	}
+
+	PX4_INFO("TEST_ESC -> value: %.2f | duration: %.2f s", (double)value, (double)duration_s);
+
+	_actuator_test_pub.publish(msg);
+}
 
 private:
 	int _max_iter{-1};
@@ -381,6 +412,7 @@ private:
 
 	uORB::Publication<ekf_score_s> _ekf_score_pub{ORB_ID(ekf_score)};
 	uORB::Publication<leader_publishable_info_s> _leader_publishable_info_pub{ORB_ID(leader_publishable_info)};
+	uORB::Publication<actuator_test_s> _actuator_test_pub{ORB_ID(actuator_test)};
 	uORB::Subscription _leader_publishable_info_sub{ORB_ID(leader_publishable_info)};
 
 	/* cache */
@@ -493,6 +525,32 @@ extern "C" __EXPORT int sensor_can_publisher_main(int argc, char *argv[])
 		int instance = std::atoi(argv[2]);
 
 		return listen_ekf_score_instance(instance);
+	}
+
+	if (!strcmp(argv[1], "test_esc")) {
+
+		if (!g_instance) {
+			PX4_ERR("module not running");
+			return -1;
+		}
+
+		if (argc < 4) {
+			PX4_ERR("Usage: sensor_can_publisher test_esc <value -1..1> <time_s>");
+			return -1;
+		}
+
+		float value = atof(argv[2]);
+		float time_s = atof(argv[3]);
+
+		// clamp por segurança
+		if (value > 1.0f) value = 1.0f;
+		if (value < -1.0f) value = -1.0f;
+
+		if (time_s < 0.f) time_s = 0.f;
+
+		g_instance->test_esc(value, time_s);
+
+		return 0;
 	}
 
 
