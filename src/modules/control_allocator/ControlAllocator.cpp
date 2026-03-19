@@ -693,7 +693,7 @@ ControlAllocator::publish_actuator_controls()
 		int selected_matrix = _control_allocation_selection_indexes[actuator_idx];
 		float actuator_sp = _control_allocation[selected_matrix]->getActuatorSetpoint()(actuator_idx_matrix[selected_matrix]);
 		actuator_motors.control[motors_idx] = PX4_ISFINITE(actuator_sp) ? actuator_sp : NAN;
-		actuator_motors.control[motors_idx] = 0.5;//(_my_id%10)/10; //TODO: COMENTAR ESSA LINHA INTEIRA DEPOIS É SÓ PRA TESTE DO CAN.
+		//actuator_motors.control[motors_idx] = 0.5;//(_my_id%10)/10; //TODO: COMENTAR ESSA LINHA INTEIRA DEPOIS É SÓ PRA TESTE DO CAN.
 		if (stopped_motors & (1u << motors_idx)) {
 			actuator_motors.control[motors_idx] = NAN;
 		}
