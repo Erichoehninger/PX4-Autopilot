@@ -308,8 +308,8 @@ PARAM_DEFINE_INT32(SYS_FAILURE_EN, 0);
  * Identificador único para comunicação via Socket/CAN (futuramente)
  * valor default deve ser o número serial da board quando disponível.
  *
- * @min -1
- * @max 4294967295
+ *
+ *
  * @group System
  */
 PARAM_DEFINE_INT32(SYS_PX4_COMM_ID, -1);

@@ -71,6 +71,7 @@ UavcanEscController::init()
 	int32_t iface_mask{0xFF};
 
 	if (param_get(param_find("UAVCAN_ESC_IFACE"), &iface_mask) == OK) {
+		//Só trocar essa iface_mask para trocar a interface de publicação, 0xFF é todas (e default)
 		_uavcan_pub_raw_cmd.getTransferSender().setIfaceMask(iface_mask);
 	}
 
