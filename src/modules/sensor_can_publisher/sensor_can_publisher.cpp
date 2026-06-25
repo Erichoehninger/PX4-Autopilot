@@ -43,7 +43,9 @@
 #include <px4_platform_common/px4_config.h>
 #include <px4_platform_common/board_common.h>
 #include <perf/perf_counter.h>
+#include <lib/systemlib/mavlink_log.h>
 
+orb_advert_t _mavlink_log_pub{nullptr};
 
 
 
@@ -73,28 +75,31 @@ public:
 
 		if (_my_id < 0) {
 			PX4_ERR("SYS_PX4_COMM_ID not set or invalid");
-			return -1;
+			PX4_WARN("Attempting to set SYS_PX4_COMM_ID from board GUID");
+			char px4guid_fmt_buffer[PX4_GUID_FORMAT_SIZE];
+
+			board_get_px4_guid_formated(px4guid_fmt_buffer, sizeof(px4guid_fmt_buffer));
+			//PX4_INFO_RAW("PX4GUID: %s\n", px4guid_fmt_buffer);
+			// 1. Encontrar o comprimento da string
+			int len = strlen(px4guid_fmt_buffer);
+
+			if (len >= 6) {
+				// 2. Apontar para o início dos últimos 6 dígitos
+				char *last_six_str = &px4guid_fmt_buffer[len - 6];
+
+				// 3. Converter de Hexadecimal (base 16) para Inteiro
+				int last_six_int = (int)strtol(last_six_str, NULL, 16);
+
+				//PX4_INFO("Last 6 hex as INT: %d", last_six_int);
+				param_set(p_comm_id, &last_six_int);
+				_my_id = last_six_int%256;
+				PX4_WARN("SYS_PX4_COMM_ID set to %d from board GUID", static_cast<int>(_my_id));
+			}
+			else {PX4_ERR("GUID string too short");return -1;}
+
 		}
 
-		char px4guid_fmt_buffer[PX4_GUID_FORMAT_SIZE];
 
-		board_get_px4_guid_formated(px4guid_fmt_buffer, sizeof(px4guid_fmt_buffer));
-		//PX4_INFO_RAW("PX4GUID: %s\n", px4guid_fmt_buffer);
-		// 1. Encontrar o comprimento da string
-		int len = strlen(px4guid_fmt_buffer);
-
-		if (len >= 6) {
-			// 2. Apontar para o início dos últimos 6 dígitos
-			char *last_six_str = &px4guid_fmt_buffer[len - 6];
-
-			// 3. Converter de Hexadecimal (base 16) para Inteiro
-			int last_six_int = (int)strtol(last_six_str, NULL, 16);
-
-			//PX4_INFO("Last 6 hex as INT: %d", last_six_int);
-			param_set(p_comm_id, &last_six_int);
-			_my_id = last_six_int%256;
-		}
-		else {PX4_ERR("GUID string too short");}
 		//char guid[PX4_GUID_FORMAT_SIZE];
 		//if (board_get_px4_guid_formated(guid, sizeof(guid)) != 0) {
 		//	PX4_ERR("Failed to get board GUID");
