@@ -83,7 +83,7 @@ public:
 			// 1. Encontrar o comprimento da string
 			int len = strlen(px4guid_fmt_buffer);
 
-			if (len >= 6) {
+
 				// 2. Apontar para o início dos últimos 6 dígitos
 				char *last_six_str = &px4guid_fmt_buffer[len - 6];
 
@@ -94,8 +94,7 @@ public:
 				param_set(p_comm_id, &last_six_int);
 				_my_id = last_six_int%256;
 				PX4_WARN("SYS_PX4_COMM_ID set to %d from board GUID", static_cast<int>(_my_id));
-			}
-			else {PX4_ERR("GUID string too short");return -1;}
+
 
 		}
 
@@ -168,9 +167,14 @@ public:
 		remove_stale_peers();
 		leader_id = elect_leader(self);
 
+
 		if (leader_id == _my_id) {
+			if (previous_leader_id != _my_id) {
+				PX4_INFO("NEW_LEADER_ID: %d", static_cast<int>(_my_id));
+			}
 			handle_leader_duties();
 			}
+		previous_leader_id = leader_id;
 
 
 		if (_max_iter >= 0 && ++_count >= _max_iter) {
@@ -430,6 +434,7 @@ private:
 	leader_publishable_info_s leader_info{};
 
 	int32_t leader_id{-1};
+	int32_t previous_leader_id{-1};
 	perf_counter_t _loop_perf{nullptr};
 
 	static constexpr int MAX_EKF_INSTANCES = 3;
