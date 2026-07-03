@@ -73,7 +73,7 @@ public:
 
 		param_get(p_comm_id, &_my_id);
 
-		if (_my_id < 0) {
+		if (_my_id < 0 || _my_id > 255) {
 			PX4_ERR("SYS_PX4_COMM_ID not set or invalid");
 			PX4_WARN("Attempting to set SYS_PX4_COMM_ID from board GUID");
 			char px4guid_fmt_buffer[PX4_GUID_FORMAT_SIZE];
@@ -142,6 +142,8 @@ public:
 	for (int i = 0; i < MAX_PEERS; i++) {
 		int32_t id = peer_ids[i];
 		peers[i].latency.print(id);
+		float score = compute_score(peers[i].score);
+		PX4_INFO("Score: %.3f", (double)score);
 	}
 	return 0;
 	//px4_sem_post(&_peers_sem);
@@ -166,15 +168,10 @@ public:
 		update_local_peers();
 		remove_stale_peers();
 		leader_id = elect_leader(self);
+		_my_curr_score = self;
+		PX4_INFO("NEW_LEADER_ID: %d", static_cast<int>(leader_id));
 
 
-		if (leader_id == _my_id) {
-			if (previous_leader_id != _my_id) {
-				PX4_INFO("NEW_LEADER_ID: %d", static_cast<int>(_my_id));
-			}
-			handle_leader_duties();
-			}
-		previous_leader_id = leader_id;
 
 
 		if (_max_iter >= 0 && ++_count >= _max_iter) {
@@ -317,6 +314,10 @@ public:
 		return _my_id;
 	}
 
+	float get_my_curr_score() const {
+		return compute_score(_my_curr_score);
+	}
+
 	int32_t get_leader_id() const {
 		return leader_id;
 	}
@@ -338,7 +339,9 @@ public:
 
 		msg_ekfs.ekf_flags = self.ekf_flags;
 		msg_ekfs.nav_state = self.nav_state;
-		msg_ekfs.timestamp_utc = self.timestamp_utc;
+		msg_ekfs.timestamp_utc = static_cast<uint64_t>(leader_id); //self.timestamp_utc;
+
+		msg_ekfs.leader_id = leader_id;
 
 		_ekf_score_pub.publish(msg_ekfs);
 	}
@@ -436,7 +439,7 @@ private:
 	int32_t leader_id{-1};
 	int32_t previous_leader_id{-1};
 	perf_counter_t _loop_perf{nullptr};
-
+	EkfScore _my_curr_score{};
 	static constexpr int MAX_EKF_INSTANCES = 3;
 
 	uORB::Subscription _ekf_score_subs[MAX_EKF_INSTANCES] = {
@@ -518,7 +521,7 @@ extern "C" __EXPORT int sensor_can_publisher_main(int argc, char *argv[])
 		if (g_instance) {
 			PX4_INFO("sensor_can_publisher is running");
 			g_instance->print_status();
-			PX4_INFO("Eu: %ld | Lider Atual: %ld", (long)g_instance->get_my_id(), (long)g_instance->get_leader_id());
+			PX4_INFO("Eu: %ld| Meu Score: %.3f | Lider Atual: %ld", (long)g_instance->get_my_id(), (double)g_instance->get_my_curr_score(), (long)g_instance->get_leader_id());
 		} else {
 			PX4_INFO("sensor_can_publisher is stopped");
 

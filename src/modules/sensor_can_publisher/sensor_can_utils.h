@@ -20,19 +20,21 @@
 /* ======================== PAYLOAD ======================== */
 
 struct EkfScore {
-	int32_t   instance_id;
-	uint64_t timestamp_utc;
+    int32_t   instance_id;
+    uint64_t timestamp_utc;
 
-	float vel_test;
-	float pos_test;
-	float hgt_test;
-	float hdg_test;
+    float vel_test;
+    float pos_test;
+    float hgt_test;
+    float hdg_test;
 
-	float pos_var;
-	float vel_var;
+    float pos_var;
+    float vel_var;
 
-	uint16_t ekf_flags;
-	uint8_t  nav_state;
+    uint16_t ekf_flags;
+    uint8_t  nav_state;
+
+    int32_t leader_id;
 };
 
 
@@ -139,19 +141,33 @@ inline bool is_valid_peer(const EkfScore &s, uint64_t now)
 
 inline float compute_score(const EkfScore &s)
 {
-	// teste simples: maior ID vence
-	return static_cast<float>(s.instance_id);
+	float score = 0.0f;
 
-	// score real (quando quiser ativar)
+	if (PX4_ISFINITE(s.vel_test)) {
+		score += 1.0f * s.vel_test;
+	}
 
-	//return static_cast<float>(
-	//	1.0f * s.vel_test +
-	//	1.0f * s.pos_test +
-	//	0.5f * s.hgt_test +
-	//	0.5f * s.hdg_test +
-	//	0.2f * s.pos_var +
-	//	0.2f * s.vel_var);
+	if (PX4_ISFINITE(s.pos_test)) {
+		score += 1.0f * s.pos_test;
+	}
 
+	if (PX4_ISFINITE(s.hgt_test)) {
+		score += 0.5f * s.hgt_test;
+	}
+
+	if (PX4_ISFINITE(s.hdg_test)) {
+		score += 0.5f * s.hdg_test;
+	}
+
+	if (PX4_ISFINITE(s.pos_var)) {
+		score += 0.2f * s.pos_var;
+	}
+
+	if (PX4_ISFINITE(s.vel_var)) {
+		score += 0.2f * s.vel_var;
+	}
+
+	return score;
 }
 
 inline int32_t elect_leader(const EkfScore &self)
@@ -215,23 +231,25 @@ inline int find_or_allocate_peer(int32_t peer_id)
 
 static EkfScore ekfScoreFromUorb(const ekf_score_s &u)
 {
-	EkfScore s{};
+    EkfScore s{};
 
-	s.instance_id = u.instance_id;
+    s.instance_id = u.instance_id;
 
-	s.vel_test = u.vel_test;
-	s.pos_test = u.pos_test;
-	s.hgt_test = u.hgt_test;
-	s.hdg_test = u.hdg_test;
+    s.vel_test = u.vel_test;
+    s.pos_test = u.pos_test;
+    s.hgt_test = u.hgt_test;
+    s.hdg_test = u.hdg_test;
 
-	s.pos_var = u.pos_var;
-	s.vel_var = u.vel_var;
+    s.pos_var = u.pos_var;
+    s.vel_var = u.vel_var;
 
-	s.ekf_flags = u.ekf_flags;
-	s.nav_state = u.nav_state;
-	s.timestamp_utc = u.timestamp_utc;
+    s.ekf_flags = u.ekf_flags;
+    s.nav_state = u.nav_state;
+    s.timestamp_utc = u.timestamp_utc;
 
-	return s;
+    s.leader_id = u.leader_id;      // <-- novo
+
+    return s;
 }
 
 static int listen_ekf_score_instance(int instance)
@@ -268,15 +286,16 @@ static int listen_ekf_score_instance(int instance)
 			orb_copy(ORB_ID(ekf_score), fd, &msg);
 
 			PX4_INFO(
-				"ekf_score[%d]: ts=%" PRIu64
-				" inst_id=%ld vel=%.2f pos=%.2f hgt=%.2f hdg=%.2f",
-				instance,
-				msg.timestamp,
-				(long)msg.instance_id,
-				(double)msg.vel_test,
-				(double)msg.pos_test,
-				(double)msg.hgt_test,
-				(double)msg.hdg_test
+			"ekf_score[%d]: ts=%" PRIu64
+			" inst_id=%ld leader=%ld vel=%.2f pos=%.2f hgt=%.2f hdg=%.2f",
+			instance,
+			msg.timestamp,
+			(long)msg.instance_id,
+			(long)msg.leader_id,
+			(double)msg.vel_test,
+			(double)msg.pos_test,
+			(double)msg.hgt_test,
+			(double)msg.hdg_test
 			);
 			count++;
 		}
