@@ -143,9 +143,9 @@ inline float compute_score(const EkfScore &s)
 {
 	float score = 0.0f;
 
-	if (PX4_ISFINITE(s.vel_test)) {
+	/*if (PX4_ISFINITE(s.vel_test)) {
 		score += 1.0f * s.vel_test;
-	}
+	}*/
 
 	if (PX4_ISFINITE(s.pos_test)) {
 		score += 1.0f * s.pos_test;
@@ -196,7 +196,7 @@ inline int32_t elect_leader(const EkfScore &self)
 			//	continue;
 			//}
 			float s = compute_score(peer.score);
-			if (s > best_score) {
+			if (s < best_score) { // quanto menor o resultado melhor.
 				best_score = s;
 				best_id = id;
 			}
