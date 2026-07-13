@@ -13,7 +13,6 @@
 #define EKF_SCORE_TIMEOUT 200000 // 200 ms
 
 
-
 #include <cmath>
 
 
@@ -143,10 +142,6 @@ inline float compute_score(const EkfScore &s)
 {
 	float score = 0.0f;
 
-	/*if (PX4_ISFINITE(s.vel_test)) {
-		score += 1.0f * s.vel_test;
-	}*/
-
 	if (PX4_ISFINITE(s.pos_test)) {
 		score += 1.0f * s.pos_test;
 	}
@@ -167,43 +162,99 @@ inline float compute_score(const EkfScore &s)
 		score += 0.2f * s.vel_var;
 	}
 
+
+
 	return score;
 }
 
-inline int32_t elect_leader(const EkfScore &self)
+inline int32_t elect_leader(const EkfScore &self, int32_t current_leader_id = -1)
 {
-	//timespec ts{};
-	//px4_clock_gettime(CLOCK_REALTIME, &ts);
+	constexpr float START_SWITCH  = 0.25f; // precisa melhorar pelo menos isso para trocar
+	constexpr float CANCEL_SWITCH = 0.15f; // depois de trocar, só volta se perder essa margem
 
-	float best_score = compute_score(self);
-	int32_t best_id = self.instance_id;
+	static bool switch_armed = false;
 
+	float leader_score = INFINITY;
+	float best_score   = compute_score(self);
+	int32_t best_id    = self.instance_id;
+	uint8_t active_peers = 0;
+	//----------------------------------------------------------
+	// Descobre o melhor score e o score do líder atual
+	//----------------------------------------------------------
 
-	//px4_sem_wait(&peers_sem);
+	if (self.instance_id == current_leader_id) {
+		leader_score = best_score;
+	}
 
-		for (int i = 0; i < MAX_PEERS; i++) {
+	for (int i = 0; i < MAX_PEERS; i++) {
 
-			const int32_t id = peer_ids[i];
-			// slot vazio
-			if (id < 0) {
-				continue;
-			}
-			const PeerState &peer = peers[i];
-			if (id == self.instance_id) {
-				continue;
-			}
-			//if (!is_valid_peer(peer.score, now)) {
-			//	continue;
-			//}
-			float s = compute_score(peer.score);
-			if (s < best_score) { // quanto menor o resultado melhor.
-				best_score = s;
-				best_id = id;
-			}
+		const int32_t id = peer_ids[i];
+		active_peers = 0;
+		if (id < 0 || id == self.instance_id) {
+			continue;
 		}
-	//px4_sem_post(&peers_sem);
+		else{
+			active_peers++;
+		}
 
+		const float s = compute_score(peers[i].score);
 
+		if (id == current_leader_id) {
+			leader_score = s;
+		}
+
+		// menor score vence
+		if (s < best_score ||
+		   (fabsf(s - best_score) < 1e-6f && id > best_id)) {
+			best_score = s;
+			best_id = id;
+		}
+	}
+
+	//----------------------------------------------------------
+	// Primeira eleição
+	//----------------------------------------------------------
+
+	if (current_leader_id < 0 && active_peers > 0) {
+		switch_armed = false;
+		return best_id;
+	}
+
+	//----------------------------------------------------------
+	// Se o líder desapareceu
+	//----------------------------------------------------------
+
+	if (!PX4_ISFINITE(leader_score)) {
+		switch_armed = false;
+		return best_id;
+	}
+
+	float improvement = leader_score - best_score;
+
+	//----------------------------------------------------------
+	// Schmitt Trigger
+	//----------------------------------------------------------
+
+	// Ainda não habilitou a troca
+	if (!switch_armed) {
+
+		// Só arma quando a vantagem é suficientemente grande
+		if (improvement >= START_SWITCH) {
+			switch_armed = true;
+		}
+
+		return current_leader_id;
+	}
+
+	// Já estava armado.
+	// Se perdeu muita vantagem, desarma.
+	if (improvement < CANCEL_SWITCH) {
+		switch_armed = false;
+		return current_leader_id;
+	}
+
+	// Continua armado e o melhor candidato continua melhor.
+	switch_armed = false;
 	return best_id;
 }
 

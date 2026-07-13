@@ -121,7 +121,7 @@ public:
 		PX4_INFO("sensor_can_publisher running");
 		//ScheduleOnInterval(20000); // já agenda aqui 👍
 		//ScheduleNow();
-		ScheduleOnInterval(20000);
+		ScheduleOnInterval(10000); //diminui pra 10ms pra pegar mais rápido o líder
 
 
 		return 0;
@@ -164,10 +164,11 @@ public:
 
 		update_uorb_subs();
 		montar_mensage(self);
-		publish_ekf_score_uorb(self);
+
 		update_local_peers();
 		remove_stale_peers();
-		leader_id = elect_leader(self);
+		leader_id = elect_leader(self, leader_id);
+		publish_ekf_score_uorb(self);
 		_my_curr_score = self;
 		PX4_INFO("NEW_LEADER_ID: %d", static_cast<int>(leader_id));
 
@@ -315,7 +316,9 @@ public:
 	}
 
 	float get_my_curr_score() const {
+
 		return compute_score(_my_curr_score);
+
 	}
 
 	int32_t get_leader_id() const {
@@ -406,7 +409,7 @@ private:
 	int _count{0};
 
 	int32_t _my_id{-1};
-	static constexpr uint64_t PEER_TIMEOUT_US = 50000; // 50 ms
+	static constexpr uint64_t PEER_TIMEOUT_US = 100000; // 100 ms
 
 
 	SensorCanRx *_rx{nullptr};
