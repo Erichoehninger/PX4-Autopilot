@@ -167,7 +167,7 @@ public:
 
 		update_local_peers();
 		remove_stale_peers();
-		leader_id = elect_leader(self, leader_id);
+		update_leader_with_self(self);   // era: leader_id = elect_leader(self, leader_id);
 		publish_ekf_score_uorb(self);
 		_my_curr_score = self;
 		PX4_INFO("NEW_LEADER_ID: %d", static_cast<int>(leader_id));
@@ -244,7 +244,7 @@ public:
 
 		self.ekf_flags = est.solution_status_flags;
 		self.nav_state = veh.nav_state;
-		self.timestamp_utc = hrt_absolute_time();
+		self.timestamp_utc = static_cast<uint64_t>(leader_id);//hrt_absolute_time();
 	}
 
 	void update_local_peers(){
@@ -255,16 +255,13 @@ public:
 			}
 			if (_ekf_score_subs[i].updated())
 			{
-
 				if (_ekf_score_subs[i].copy(&rx)) {
 
-					// ignora mensagem própria
 					if (rx.instance_id == _my_id) {
 						continue;
 					}
 					uint64_t rx_time = hrt_absolute_time();
 					uint64_t latency = rx_time - rx.timestamp;
-					//px4_sem_wait(&peers_sem);
 					int idx = find_or_allocate_peer(rx.instance_id);
 					if (idx >= 0) {
 						PeerState &peer = peers[idx];
@@ -276,11 +273,35 @@ public:
 						} else {
 							peer.latency.lost_packages++;
 						}
+
+						maybe_update_leader(rx.instance_id, peer.score);
 					}
-					//px4_sem_post(&peers_sem);
 				}
 			}
+		}
+	}
 
+	// Só troca de líder quando chega um score NOVO melhor que o do líder atual.
+	// Se o score novo for do próprio líder, atualiza o valor de referência mesmo
+	// que tenha piorado (senão o líder fica "travado" com um score desatualizado).
+	void maybe_update_leader(int32_t candidate_id, const EkfScore &candidate_score)
+	{
+		float candidate_val = compute_score(candidate_score);
+
+		if (leader_id < 0) {
+			leader_id = candidate_id;
+			leader_score = candidate_val;
+			return;
+		}
+
+		if (candidate_id == leader_id) {
+			leader_score = candidate_val;
+			return;
+		}
+
+		if (candidate_val < leader_score) {
+			leader_id = candidate_id;
+			leader_score = candidate_val;
 		}
 	}
 
@@ -367,12 +388,56 @@ public:
 			peer_ids[i],
 			(double)age / 1000.0);
 
+		if (peer_ids[i] == leader_id) {
+			_leader_lost = true;
+		}
+
 		peer_ids[i] = -1;
-		peers[i] = PeerState{}; //reseta estado
+		peers[i] = PeerState{};
 
 		}
 	}
 	}
+
+	void elect_leader_from_scratch(const EkfScore &self)
+	{
+		float best_score = compute_score(self);
+		int32_t best_id = self.instance_id;
+
+		for (int i = 0; i < MAX_PEERS; i++) {
+			int32_t id = peer_ids[i];
+			if (id < 0) {
+				continue;
+			}
+			float score = compute_score(peers[i].score);
+			if (score < best_score) {
+				best_score = score;
+				best_id = id;
+			}
+		}
+
+		leader_id = best_id;
+		leader_score = best_score;
+	}
+
+	void update_leader_with_self(const EkfScore &self)
+	{
+		if (leader_id < 0 || _leader_lost) {
+			elect_leader_from_scratch(self);
+			_leader_lost = false;
+			return;
+		}
+
+		float self_score = compute_score(self);
+
+		if (self.instance_id == leader_id) {
+			leader_score = self_score;
+		} else if (self_score < leader_score) {
+			leader_id = self.instance_id;
+			leader_score = self_score;
+		}
+	}
+
 	void test_esc(float value, float duration_s)
 {
 	actuator_test_s msg{};
@@ -443,6 +508,8 @@ private:
 	int32_t previous_leader_id{-1};
 	perf_counter_t _loop_perf{nullptr};
 	EkfScore _my_curr_score{};
+	float leader_score{FLT_MAX};
+	bool _leader_lost{false};
 	static constexpr int MAX_EKF_INSTANCES = 3;
 
 	uORB::Subscription _ekf_score_subs[MAX_EKF_INSTANCES] = {

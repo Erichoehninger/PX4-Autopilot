@@ -9,6 +9,7 @@
 #include <poll.h>
 #include <uORB/uORB.h>
 
+
 #define EKF_BROADCAST_PORT 14560
 #define EKF_SCORE_TIMEOUT 200000 // 200 ms
 
@@ -169,92 +170,32 @@ inline float compute_score(const EkfScore &s)
 
 inline int32_t elect_leader(const EkfScore &self, int32_t current_leader_id = -1)
 {
-	constexpr float START_SWITCH  = 0.25f; // precisa melhorar pelo menos isso para trocar
-	constexpr float CANCEL_SWITCH = 0.15f; // depois de trocar, só volta se perder essa margem
+	(void)current_leader_id;
 
-	static bool switch_armed = false;
-
-	float leader_score = INFINITY;
-	float best_score   = compute_score(self);
-	int32_t best_id    = self.instance_id;
-	uint8_t active_peers = 0;
-	//----------------------------------------------------------
-	// Descobre o melhor score e o score do líder atual
-	//----------------------------------------------------------
-
-	if (self.instance_id == current_leader_id) {
-		leader_score = best_score;
-	}
+	float best_score = UINT32_MAX;
+	int32_t best_id = current_leader_id;
 
 	for (int i = 0; i < MAX_PEERS; i++) {
 
 		const int32_t id = peer_ids[i];
-		active_peers = 0;
-		if (id < 0 || id == self.instance_id) {
+
+		if (id < 0) {
 			continue;
 		}
-		else{
-			active_peers++;
-		}
 
-		const float s = compute_score(peers[i].score);
+		const float score = compute_score(peers[i].score);
 
-		if (id == current_leader_id) {
-			leader_score = s;
-		}
+		if (score < best_score ||
+		    (fabsf(score - best_score) < 0.05f && id > current_leader_id)) { // desempate por ID
 
-		// menor score vence
-		if (s < best_score ||
-		   (fabsf(s - best_score) < 1e-6f && id > best_id)) {
-			best_score = s;
+			best_score = score;
 			best_id = id;
 		}
 	}
-
-	//----------------------------------------------------------
-	// Primeira eleição
-	//----------------------------------------------------------
-
-	if (current_leader_id < 0 && active_peers > 0) {
-		switch_armed = false;
-		return best_id;
+	if(best_score > compute_score(self)){
+		best_id = self.instance_id;
 	}
 
-	//----------------------------------------------------------
-	// Se o líder desapareceu
-	//----------------------------------------------------------
-
-	if (!PX4_ISFINITE(leader_score)) {
-		switch_armed = false;
-		return best_id;
-	}
-
-	float improvement = leader_score - best_score;
-
-	//----------------------------------------------------------
-	// Schmitt Trigger
-	//----------------------------------------------------------
-
-	// Ainda não habilitou a troca
-	if (!switch_armed) {
-
-		// Só arma quando a vantagem é suficientemente grande
-		if (improvement >= START_SWITCH) {
-			switch_armed = true;
-		}
-
-		return current_leader_id;
-	}
-
-	// Já estava armado.
-	// Se perdeu muita vantagem, desarma.
-	if (improvement < CANCEL_SWITCH) {
-		switch_armed = false;
-		return current_leader_id;
-	}
-
-	// Continua armado e o melhor candidato continua melhor.
-	switch_armed = false;
 	return best_id;
 }
 
