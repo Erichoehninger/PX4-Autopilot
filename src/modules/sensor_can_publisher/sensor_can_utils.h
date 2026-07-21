@@ -11,7 +11,7 @@
 
 
 #define EKF_BROADCAST_PORT 14560
-#define EKF_SCORE_TIMEOUT 200000 // 200 ms
+#define EKF_SCORE_TIMEOUT 150000 // 150 ms
 
 
 #include <cmath>
@@ -98,6 +98,7 @@ struct PeerState {
 	EkfScore score;
 	uint64_t last_rx;
 	LatencyStats latency;
+	uint8_t miss_count{0};
 };
 
 
@@ -141,6 +142,7 @@ inline bool is_valid_peer(const EkfScore &s, uint64_t now)
 
 inline float compute_score(const EkfScore &s)
 {
+	//return static_cast<float>(s.instance_id);
 	float score = 0.0f;
 
 	if (PX4_ISFINITE(s.pos_test)) {

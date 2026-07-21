@@ -170,6 +170,9 @@ public:
 		update_leader_with_self(self);   // era: leader_id = elect_leader(self, leader_id);
 		publish_ekf_score_uorb(self);
 		_my_curr_score = self;
+		if (leader_id == self.instance_id) {
+			handle_leader_duties();
+			}
 		PX4_INFO("NEW_LEADER_ID: %d", static_cast<int>(leader_id));
 
 
@@ -264,17 +267,18 @@ public:
 					uint64_t latency = rx_time - rx.timestamp;
 					int idx = find_or_allocate_peer(rx.instance_id);
 					if (idx >= 0) {
-						PeerState &peer = peers[idx];
-						peer.score   = ekfScoreFromUorb(rx);
-						peer.last_rx = rx_time;
+					PeerState &peer = peers[idx];
+					peer.score      = ekfScoreFromUorb(rx);
+					peer.last_rx    = rx_time;
+					peer.miss_count = 0;              // NOVO
 
-						if (latency < 10000000) {
-							peer.latency.update(latency);
-						} else {
-							peer.latency.lost_packages++;
-						}
+					if (latency < 10000000) {
+						peer.latency.update(latency);
+					} else {
+						peer.latency.lost_packages++;
+					}
 
-						maybe_update_leader(rx.instance_id, peer.score);
+					maybe_update_leader(rx.instance_id, peer.score);
 					}
 				}
 			}
@@ -372,31 +376,38 @@ public:
 
 	void remove_stale_peers()
 	{
-	uint64_t now = hrt_absolute_time();
+		uint64_t now = hrt_absolute_time();
+		static constexpr uint8_t MAX_MISSES = 100; // ajuste depois de calibrar
 
-	for (int i = 0; i < MAX_PEERS; i++) {
+		for (int i = 0; i < MAX_PEERS; i++) {
 
-		if (peer_ids[i] < 0) {
-		continue;
+			if (peer_ids[i] < 0) {
+				continue;
+			}
+
+			uint64_t age = now - peers[i].last_rx;
+
+			if (age > PEER_TIMEOUT_US) {
+
+				peers[i].miss_count++;
+
+				if (peers[i].miss_count < MAX_MISSES) {
+					continue; // ainda dentro da tolerância
+				}
+
+				PX4_WARN("Peer %" PRId32 " timed out (%.2f ms, %d misses)",
+					peer_ids[i],
+					(double)age / 1000.0,
+					peers[i].miss_count);
+
+				if (peer_ids[i] == leader_id) {
+					_leader_lost = true;
+				}
+
+				peer_ids[i] = -1;
+				peers[i] = PeerState{};
+			}
 		}
-
-		uint64_t age = now - peers[i].last_rx;
-
-		if (age > PEER_TIMEOUT_US) {
-
-		PX4_WARN("Peer %" PRId32 " timed out (%.2f ms)",
-			peer_ids[i],
-			(double)age / 1000.0);
-
-		if (peer_ids[i] == leader_id) {
-			_leader_lost = true;
-		}
-
-		peer_ids[i] = -1;
-		peers[i] = PeerState{};
-
-		}
-	}
 	}
 
 	void elect_leader_from_scratch(const EkfScore &self)
@@ -510,7 +521,7 @@ private:
 	EkfScore _my_curr_score{};
 	float leader_score{FLT_MAX};
 	bool _leader_lost{false};
-	static constexpr int MAX_EKF_INSTANCES = 3;
+	static constexpr int MAX_EKF_INSTANCES = 4;
 
 	uORB::Subscription _ekf_score_subs[MAX_EKF_INSTANCES] = {
 	uORB::Subscription(ORB_ID(ekf_score), 0),

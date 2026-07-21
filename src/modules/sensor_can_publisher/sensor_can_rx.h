@@ -114,5 +114,5 @@ public:
 
 private:
 	int32_t _my_id{-1};
-	int _subs[MAX_EKF_INSTANCES]{0, 1, -1}; // deixar o slot 2 vazio por agora já que os testes estão utilzando apenas 2 Pixhawks por agora (05/02/26)
+	int _subs[MAX_EKF_INSTANCES]{0, 1, 2}; // deixar o slot 2 vazio por agora já que os testes estão utilzando apenas 2 Pixhawks por agora (05/02/26)
 };
