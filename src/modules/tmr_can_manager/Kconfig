@@ -1,0 +1,6 @@
+config MODULES_TMR_CAN_MANAGER
+	bool "TMR CAN Manager"
+	default y
+	help
+	  Módulo de gerenciamento de Tripla Redundância (TMR)
+	  para comunicação CAN-FD e consenso de líder entre 3 controladoras.
