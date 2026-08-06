@@ -8,10 +8,10 @@
 #include <px4_platform_common/module.h>
 #include <px4_platform_common/posix.h>
 #include <px4_platform_common/time.h>
-#include <px4_platform_common/px4_work_queue/ScheduledWorkItem.hpp>
+#include <px4_platform_common/tasks.h>
 #include <parameters/param.h>
 #include <drivers/drv_hrt.h>
-#include <errno.h>
+
 #include <uORB/uORB.h>
 #include <uORB/Subscription.hpp>
 #include <uORB/Publication.hpp>
@@ -34,6 +34,7 @@
 #include <time.h>
 #include <poll.h>
 #include <fcntl.h>
+#include <errno.h>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -46,6 +47,17 @@
 #include <perf/perf_counter.h>
 #include <lib/systemlib/mavlink_log.h>
 
+#define UDP_PORT 14560
+#define MAX_RX_HISTORY 10
+#define MAX_MSG_SIZE 128
+
+struct EthernetMessage
+{
+	uint32_t sender_id;
+	uint32_t counter;
+	uint64_t timestamp;
+	char data[MAX_MSG_SIZE];
+};
 orb_advert_t _mavlink_log_pub{nullptr};
 
 
@@ -54,13 +66,12 @@ orb_advert_t _mavlink_log_pub{nullptr};
 class SensorCanRx;
 
 class SensorCanPublisher :
-	public ModuleBase<SensorCanPublisher>,
-	public px4::ScheduledWorkItem
+	public ModuleBase<SensorCanPublisher>
 {
 
 public:
 	SensorCanPublisher(int max_iter) :
-		ScheduledWorkItem(MODULE_NAME,px4::wq_configurations::hp_default),_max_iter(max_iter){}
+		_max_iter(max_iter){}
 	int init()
 	{
 		_loop_perf = perf_alloc(PC_ELAPSED, MODULE_NAME": loop");
@@ -111,60 +122,27 @@ public:
 
 
 		px4_sem_init(&peers_sem, 1, 1);
+		px4_sem_init(&_manual_sem, 1, 1);
 
-		PX4_INFO("sensor_can_publisher running");
-		//ScheduleOnInterval(20000); // já agenda aqui 👍
-		//ScheduleNow();
-		ScheduleOnInterval(10000); //diminui pra 10ms pra pegar mais rápido o líder
+		//_rx = new SensorCanRx(_my_id);
+		//_rx->init();
+		//if (!_rx) {
+		//	PX4_ERR("Failed to create RX");
+		//	return -1;
+		//}
+
+		// NOTA: o socket e' criado dentro de run_loop(), que roda inteiramente
+		// dentro da task dedicada deste modulo (spawnada via px4_task_spawn_cmd).
+		// Antes isso rodava na work queue compartilhada hp_default, que nao tem
+		// memoria reservada suficiente pra abrir um socket (ENOMEM) - por isso
+		// o modulo virou uma task propria em vez de um work item.
+
+		PX4_INFO("sensor_can_publisher init ok");
 
 		return 0;
 	}
 
-	void udp_test()
-	{
-	ekf_score_s msg{};
-	msg.timestamp = hrt_absolute_time();
-	msg.instance_id = _my_id;
-	msg.leader_id = _my_id;
-	PX4_INFO("TEST: this=%p sock=%d", this, _sock);
 
-	int type;
-	socklen_t len = sizeof(type);
-
-	int ret = getsockopt(
-	_sock,
-	SOL_SOCKET,
-	SO_TYPE,
-	&type,
-	&len
-	);
-
-	PX4_INFO("getsockopt ret=%d errno=%d type=%d",
-		ret,
-		errno,
-		type);
-
-	PX4_INFO("Sending UDP test packet...");
-	PX4_INFO("Socket FD: %d", _sock);
-	if (_sock < 0) {
-	PX4_ERR("INVALID SOCKET %d", _sock);
-	return;
-	}
-	 ret = sendto(_sock,
-				&msg,
-				sizeof(msg),
-				0,
-				(sockaddr *)&_broadcast_addr,
-				sizeof(_broadcast_addr));
-
-	if (ret < 0) {
-		PX4_ERR("sendto failed errno=%d", errno);
-
-	} else {
-		PX4_INFO("sendto OK (%d bytes)", (int)ret);
-	}
-
-	}
 
 	~SensorCanPublisher()
 	{
@@ -173,6 +151,129 @@ public:
 
 
 	}
+
+	int setup_socket()
+{
+	_sock = socket(AF_INET, SOCK_DGRAM, 0);
+
+	if (_sock < 0) {
+		PX4_ERR("socket failed, errno=%d", errno);
+		return -1;
+	}
+
+	int enable = 1;
+
+	setsockopt(_sock,
+			   SOL_SOCKET,
+			   SO_BROADCAST,
+			   &enable,
+			   sizeof(enable));
+
+	struct sockaddr_in local{};
+
+	local.sin_family = AF_INET;
+	local.sin_port = htons(UDP_PORT);
+	local.sin_addr.s_addr = INADDR_ANY;
+
+	if (bind(_sock,
+			 (sockaddr *)&local,
+			 sizeof(local)) < 0) {
+		PX4_ERR("bind failed, errno=%d", errno);
+		return -1;
+	}
+
+	int flags = fcntl(_sock, F_GETFL, 0);
+	fcntl(_sock, F_SETFL, flags | O_NONBLOCK);
+
+	memset(&_broadcast_addr, 0, sizeof(_broadcast_addr));
+
+	_broadcast_addr.sin_family = AF_INET;
+	_broadcast_addr.sin_port = htons(UDP_PORT);
+	_broadcast_addr.sin_addr.s_addr = inet_addr("192.168.0.255");
+	PX4_INFO("Broadcast=%s",
+         inet_ntoa(_broadcast_addr.sin_addr));
+	PX4_INFO("Socket ready, fd=%d", _sock);
+	send_broadcast("sensor_can_publisher started");
+
+	return 0;
+}
+
+void send_broadcast(const char *msg)
+{
+	if (_sock < 0) {
+		PX4_WARN("send_broadcast chamado sem socket valido (fd=%d)", _sock);
+		return;
+	}
+
+	EthernetMessage packet{};
+
+	packet.sender_id = _my_id;
+	packet.counter = _tx_count;
+	packet.timestamp = hrt_absolute_time();
+
+	strncpy(packet.data,
+			msg,
+			MAX_MSG_SIZE - 1);
+
+	int ret = sendto(_sock,
+		   &packet,
+		   sizeof(packet),
+		   0,
+		   (sockaddr *)&_broadcast_addr,
+		   sizeof(_broadcast_addr));
+
+	PX4_INFO("sock=%d sendto=%d errno=%d", _sock, ret, errno);
+
+	// So conta como TX real se o sendto realmente teve sucesso.
+	if (ret >= 0) {
+		_tx_count++;
+	}
+}
+
+void receive_messages()
+{
+	if (_sock < 0) {
+		return;
+	}
+
+	while (true) {
+
+		EthernetMessage packet{};
+
+		sockaddr_in src{};
+		socklen_t len = sizeof(src);
+
+		int ret = recvfrom(_sock,
+						   &packet,
+						   sizeof(packet),
+						   0,
+						   (sockaddr *)&src,
+						   &len);
+
+		if (ret < 0) {
+			if (errno != EAGAIN && errno != EWOULDBLOCK) {
+				PX4_INFO("recv errno=%d", errno);
+			}
+			break;
+		}
+
+		PX4_INFO("RX from %s id=%u cnt=%u msg=%s",
+         inet_ntoa(src.sin_addr),
+         (unsigned)packet.sender_id,
+         (unsigned)packet.counter,
+         packet.data);
+
+		_rx_count++;
+
+		_history[_history_index] = packet;
+
+		_history_index++;
+
+		if (_history_index >= MAX_RX_HISTORY) {
+			_history_index = 0;
+		}
+	}
+}
 
 	int print_status()
 	{
@@ -188,233 +289,113 @@ public:
 	//px4_sem_post(&_peers_sem);
 	}
 
-	void init_udp_socket()
+
+
+	void run_loop()
 	{
-		PX4_INFO("INIT UDP SOCKET CALLED");
-		if (_socket_initialized) {
+		// Socket criado aqui, ja dentro da task dedicada deste modulo.
+		// Diferente da work queue compartilhada (hp_default), essa task tem
+		// memoria propria reservada, entao o socket() nao falha com ENOMEM.
+		if (setup_socket() != 0) {
+			PX4_ERR("Socket init failed inside run_loop()");
 			return;
 		}
 
-		_sock = socket(AF_INET, SOCK_DGRAM, 0);
+		_socket_ready = true;
 
-		if (_sock < 0) {
-			PX4_ERR("socket() failed errno=%d", errno);
-			return;
-		}
+		while (!should_exit()) {
+			perf_begin(_loop_perf);
 
-		int broadcast = 1;
+			// Drena qualquer mensagem manual pendente (comando "send" via CLI),
+			// enviando ela a partir daqui, no contexto correto do socket.
+			if (_manual_pending) {
+				char local_copy[MAX_MSG_SIZE];
+				px4_sem_wait(&_manual_sem);
+				strncpy(local_copy, _manual_msg, MAX_MSG_SIZE - 1);
+				local_copy[MAX_MSG_SIZE - 1] = '\0';
+				_manual_pending = false;
+				px4_sem_post(&_manual_sem);
 
-		setsockopt(
-			_sock,
-			SOL_SOCKET,
-			SO_BROADCAST,
-			&broadcast,
-			sizeof(broadcast)
-		);
-
-
-		memset(&_broadcast_addr, 0, sizeof(_broadcast_addr));
-
-		_broadcast_addr.sin_family = AF_INET;
-		_broadcast_addr.sin_port = htons(14560);
-		_broadcast_addr.sin_addr.s_addr = inet_addr("192.168.0.255");
-
-		memset(&_local_addr, 0, sizeof(_local_addr));
-
-		_local_addr.sin_family = AF_INET;
-		_local_addr.sin_port = htons(14560);
-		_local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-
-		if (bind(_sock,
-		(struct sockaddr *)&_local_addr,
-		sizeof(_local_addr)) < 0) {
-
-		PX4_ERR("bind failed errno=%d", errno);
-		close(_sock);
-		_sock = -1;
-		return;
-		}
-
-		PX4_INFO("RUN UDP socket initialized fd=%d", _sock);
-
-		_socket_initialized = true;
-	}
-
-
-
-	void Run()
-	{
-		perf_begin(_loop_perf);
-		if (should_exit()) {
-			PX4_INFO("Stopping work item");
-			ScheduleClear();
-			return;
-		}
-		EkfScore self{};
-
-		init_udp_socket();
-		if (!_socket_initialized) {
-			return;
-		}
-
-		update_uorb_subs();
-		montar_mensage(self);
-
-		receive_ekf_score_udp();
-		//update_local_peers();
-		remove_stale_peers();
-		update_leader_local(self);   // era: leader_id = elect_leader(self, leader_id);
-		publish_ekf_score_uorb(self);
-
-		_my_curr_score = self;
-		if (leader_id == self.instance_id) {
-			handle_leader_duties();
+				send_broadcast(local_copy);
 			}
-		PX4_INFO("NEW_LEADER_ID: %d", static_cast<int>(leader_id));
 
+			send_broadcast("heartbeat");
 
+			receive_messages();
 
+			EkfScore self{};
 
-		if (_max_iter >= 0 && ++_count >= _max_iter) {
-			//request_stop();
-			local_stop();
-			return;
+			update_uorb_subs();
+			montar_mensage(self);
+
+			update_local_peers();
+			remove_stale_peers();
+			update_leader_with_self(self);   // era: leader_id = elect_leader(self, leader_id);
+			publish_ekf_score_uorb(self);
+			_my_curr_score = self;
+			PX4_INFO("NEW_LEADER_ID: %d", static_cast<int>(leader_id));
+
+			if (_max_iter >= 0 && ++_count >= _max_iter) {
+				perf_end(_loop_perf);
+				break;
+			}
+
+			perf_end(_loop_perf);
+
+			usleep(10000); // 10ms, equivalente ao antigo ScheduleOnInterval
 		}
 
-		/* ---------- Reagenda ---------- */
-		//ScheduleOnInterval(20000); // ~50Hz
-		//ScheduleDelayed(20000);
-		perf_end(_loop_perf);
+		PX4_INFO("run_loop encerrando");
 
-	}
-
-	void receive_ekf_score_udp()
-	{
-	while (true) {
-
-		ekf_score_s packet{};
-
-		sockaddr_in src_addr{};
-		socklen_t addrlen = sizeof(src_addr);
-
-		ssize_t ret = recvfrom(_sock,
-				&packet,
-				sizeof(packet),
-				0,
-				(sockaddr *)&src_addr,
-				&addrlen);
-
-
-
-		if (ret < 0) {
-
-		// não há mais pacotes
-		if (errno == EAGAIN || errno == EWOULDBLOCK) {
-			break;
-		}
-
-		_udp_rx_errors++;
-		PX4_WARN("recvfrom failed (%d)", errno);
-		break;
-		}
-
-		if ((size_t)ret != sizeof(packet)) {
-		_udp_bad_size++;
-		continue;
-		}
-
-		if (packet.instance_id == _my_id) {
-		_udp_self_packets++;
-		continue;
-		}
-
-		_udp_rx_count++;
-		_last_rx_time = hrt_absolute_time();
-		_last_rx_from = packet.instance_id;
-		uint64_t latency = _last_rx_time - packet.timestamp;
-
-		int idx = find_or_allocate_peer(packet.instance_id);
-
-		if (idx < 0) {
-		continue;
-		}
-
-		PeerState &peer = peers[idx];
-
-		peer.score = ekfScoreFromUorb(packet);
-		peer.last_rx = _last_rx_time;
-		peer.miss_count = 0;
-
-		if (latency < 10000000) {
-		peer.latency.update(latency);
-
-		} else {
-		peer.latency.lost_packages++;
-		}
-
-		maybe_update_leader(packet.instance_id,
-				peer.score);
-	}
-	}
-
-	void send_ekf_score_udp(const ekf_score_s &msg)
-	{
-	if (_sock < 0) {
-		PX4_WARN("socket invalid");
-		return;
-	}
-
-	ssize_t ret = sendto(_sock,
-				&msg,
-				sizeof(msg),
-				0,
-				(sockaddr *)&_broadcast_addr,
-				sizeof(_broadcast_addr));
-
-	if (ret < 0) {
-		PX4_WARN("sendto errno=%d", errno);
-
-	} else {
-		PX4_INFO("sendto %d bytes", (int)ret);
-
-		if ((size_t)ret == sizeof(msg)) {
-		_udp_tx_count++;
-		_last_tx_time = hrt_absolute_time();
+		if (_sock >= 0) {
+			close(_sock);
+			_sock = -1;
 		}
 	}
-	}
 
-	void print_udp_status()
-	{
-	PX4_INFO("--------------- UDP ----------------");
-	PX4_INFO("TX packets      : %lu", _udp_tx_count);
-	PX4_INFO("RX packets      : %lu", _udp_rx_count);
-	PX4_INFO("RX errors       : %lu", _udp_rx_errors);
-	PX4_INFO("Bad size        : %lu", _udp_bad_size);
-	PX4_INFO("Self packets    : %lu", _udp_self_packets);
-	PX4_INFO("Leader          : %ld", leader_id);
 
-	if (_last_rx_time != 0) {
-		PX4_INFO("Last RX %.2f ms ago",
-			(double)(hrt_absolute_time() - _last_rx_time)/1000.0);
-	} else {
-		PX4_INFO("Never received");
-	}
-	}
+
+
 
 	void local_stop()
 	{
-	request_stop();
+		request_stop();
 
-	if (_sock >= 0) {
-		close(_sock);
-		_sock = -1;
-		_socket_initialized = false;
+		// da' tempo pro run_loop() (rodando na task dedicada) notar
+		// should_exit() e sair do while de forma limpa, fechando o socket
+		// dele mesmo antes de a gente destruir o objeto.
+		usleep(50000);
+
+		px4_sem_destroy(&peers_sem);
+		px4_sem_destroy(&_manual_sem);
+
+		if (_sock >= 0) {
+			close(_sock);
+			_sock = -1;
+		}
+
+		//if (_rx) {
+		//	delete _rx;
+		//	_rx = nullptr;
+		//}
 	}
 
-	ScheduleClear();
-	usleep(20000);
-	px4_sem_destroy(&peers_sem);
+	int send_manual(const char *msg)
+	{
+		// IMPORTANTE: este metodo e' chamado a partir da task do NSH shell
+		// (comando "sensor_can_publisher send ..."), que e' uma task
+		// diferente da task dedicada do modulo onde o _sock foi criado.
+		// Nao da' pra chamar sendto() direto aqui - o fd seria invalido
+		// nesse contexto (mesmo erro EBADF que tinhamos antes). Em vez
+		// disso, so' deixamos a mensagem "pendente" e quem manda de
+		// verdade e' o run_loop(), rodando no contexto correto, na
+		// proxima iteracao (ate 10ms de atraso).
+		px4_sem_wait(&_manual_sem);
+		strncpy(_manual_msg, msg, MAX_MSG_SIZE - 1);
+		_manual_msg[MAX_MSG_SIZE - 1] = '\0';
+		_manual_pending = true;
+		px4_sem_post(&_manual_sem);
+		return 0;
 	}
 
 	void update_uorb_subs(){
@@ -459,7 +440,7 @@ public:
 		self.timestamp_utc = static_cast<uint64_t>(leader_id);//hrt_absolute_time();
 	}
 
-	/*void update_local_peers(){
+	void update_local_peers(){
 		for (int i = 0; i < MAX_EKF_INSTANCES; i++) {
 			if(_leader_publishable_info_subs[i].updated())
 			{
@@ -476,23 +457,22 @@ public:
 					uint64_t latency = rx_time - rx.timestamp;
 					int idx = find_or_allocate_peer(rx.instance_id);
 					if (idx >= 0) {
-					PeerState &peer = peers[idx];
-					peer.score      = ekfScoreFromUorb(rx);
-					peer.last_rx    = rx_time;
-					peer.miss_count = 0;              // NOVO
+						PeerState &peer = peers[idx];
+						peer.score   = ekfScoreFromUorb(rx);
+						peer.last_rx = rx_time;
 
-					if (latency < 10000000) {
-						peer.latency.update(latency);
-					} else {
-						peer.latency.lost_packages++;
-					}
+						if (latency < 10000000) {
+							peer.latency.update(latency);
+						} else {
+							peer.latency.lost_packages++;
+						}
 
-					maybe_update_leader(rx.instance_id, peer.score);
+						maybe_update_leader(rx.instance_id, peer.score);
 					}
 				}
 			}
 		}
-	}*/
+	}
 
 	// Só troca de líder quando chega um score NOVO melhor que o do líder atual.
 	// Se o score novo for do próprio líder, atualiza o valor de referência mesmo
@@ -580,44 +560,36 @@ public:
 
 		msg_ekfs.leader_id = leader_id;
 
-		send_ekf_score_udp(msg_ekfs);
 		_ekf_score_pub.publish(msg_ekfs);
 	}
 
 	void remove_stale_peers()
 	{
-		uint64_t now = hrt_absolute_time();
-		static constexpr uint8_t MAX_MISSES = 100; // ajuste depois de calibrar
+	uint64_t now = hrt_absolute_time();
 
-		for (int i = 0; i < MAX_PEERS; i++) {
+	for (int i = 0; i < MAX_PEERS; i++) {
 
-			if (peer_ids[i] < 0) {
-				continue;
-			}
-
-			uint64_t age = now - peers[i].last_rx;
-
-			if (age > PEER_TIMEOUT_US) {
-
-				peers[i].miss_count++;
-
-				if (peers[i].miss_count < MAX_MISSES) {
-					continue; // ainda dentro da tolerância
-				}
-
-				PX4_WARN("Peer %" PRId32 " timed out (%.2f ms, %d misses)",
-					peer_ids[i],
-					(double)age / 1000.0,
-					peers[i].miss_count);
-
-				if (peer_ids[i] == leader_id) {
-					_leader_lost = true;
-				}
-
-				peer_ids[i] = -1;
-				peers[i] = PeerState{};
-			}
+		if (peer_ids[i] < 0) {
+		continue;
 		}
+
+		uint64_t age = now - peers[i].last_rx;
+
+		if (age > PEER_TIMEOUT_US) {
+
+		PX4_WARN("Peer %" PRId32 " timed out (%.2f ms)",
+			peer_ids[i],
+			(double)age / 1000.0);
+
+		if (peer_ids[i] == leader_id) {
+			_leader_lost = true;
+		}
+
+		peer_ids[i] = -1;
+		peers[i] = PeerState{};
+
+		}
+	}
 	}
 
 	void elect_leader_from_scratch(const EkfScore &self)
@@ -641,16 +613,13 @@ public:
 		leader_score = best_score;
 	}
 
-	void update_leader_local(const EkfScore &self)
+	void update_leader_with_self(const EkfScore &self)
 	{
 		if (leader_id < 0 || _leader_lost) {
-			if (active_peer_count() > 0) {
-				elect_leader_from_scratch(self);
-			}
+			elect_leader_from_scratch(self);
 			_leader_lost = false;
 			return;
 		}
-
 
 		float self_score = compute_score(self);
 
@@ -692,37 +661,43 @@ public:
 
 	_actuator_test_pub.publish(msg);
 }
+int print_messages()
+{
+	PX4_INFO("TX=%u RX=%u",
+         static_cast<unsigned>(_tx_count),
+         static_cast<unsigned>(_rx_count));
+
+	for (int i = 0; i < MAX_RX_HISTORY; i++) {
+
+		const EthernetMessage &m = _history[i];
+
+		if (m.timestamp == 0) {
+			continue;
+		}
+
+		PX4_INFO("[%d] id=%u cnt=%u msg=%s",
+				 i,
+				 static_cast<unsigned>(m.sender_id),
+				 static_cast<unsigned>(m.counter),
+				 m.data);
+	}
+
+	return 0;
+}
 
 private:
 	int _max_iter{-1};
 	int _count{0};
 
 	int32_t _my_id{-1};
-	static constexpr uint64_t PEER_TIMEOUT_US = 200000; // 100 ms
+	static constexpr uint64_t PEER_TIMEOUT_US = 100000; // 100 ms
 
 
-	/* ETHERNET */
-	int _sock{-1};
-	sockaddr_in _local_addr{};
-	sockaddr_in _broadcast_addr{};
-	bool _socket_initialized{false};
-	uint32_t _udp_tx_count{0};
-	uint32_t _udp_rx_count{0};
-	uint32_t _udp_rx_errors{0};
-	uint32_t _udp_bad_size{0};
-	uint32_t _udp_self_packets{0};
-
-	int _last_rx_time{0};
-	int _last_tx_time{0};
-
-	uint8_t _last_rx_from{255};
-
-
-	/* uORB */
 	SensorCanRx *_rx{nullptr};
 	ekf_score_s rx{};
 	leader_publishable_info_s msg_lpi{};
 	ekf_score_s msg_ekfs{};
+	/* uORB */
 	uORB::Subscription _est_sub{ORB_ID(estimator_status)};
 	uORB::Subscription _veh_sub{ORB_ID(vehicle_status)};
 	uORB::Subscription _lpos_sub{ORB_ID(vehicle_local_position)};
@@ -751,8 +726,33 @@ private:
 	EkfScore _my_curr_score{};
 	float leader_score{FLT_MAX};
 	bool _leader_lost{false};
-	static constexpr int MAX_EKF_INSTANCES = 4;
+	bool _socket_ready{false};
 
+	/* mensagem manual pendente: escrita pela task do CLI (send_manual),
+	 * consumida e enviada pela task da work queue (Run) */
+	px4_sem_t _manual_sem;
+	bool _manual_pending{false};
+	char _manual_msg[MAX_MSG_SIZE]{};
+
+	static constexpr int MAX_EKF_INSTANCES = 3;
+
+	uORB::Subscription _ekf_score_subs[MAX_EKF_INSTANCES] = {
+	uORB::Subscription(ORB_ID(ekf_score), 0),
+	uORB::Subscription(ORB_ID(ekf_score), 1),
+	uORB::Subscription(ORB_ID(ekf_score), 2),
+	};
+	uORB::Subscription _leader_publishable_info_subs[MAX_EKF_INSTANCES] = {
+	uORB::Subscription(ORB_ID(leader_publishable_info), 0),
+	uORB::Subscription(ORB_ID(leader_publishable_info), 1),
+	uORB::Subscription(ORB_ID(leader_publishable_info), 2),
+	};
+
+	int _sock{-1};
+	uint32_t _tx_count{0};
+	uint32_t _rx_count{0};
+	EthernetMessage _history[MAX_RX_HISTORY]{};
+	int _history_index{0};
+	struct sockaddr_in _broadcast_addr{};
 
 
 };
@@ -764,6 +764,19 @@ private:
 
 
 static SensorCanPublisher *g_instance{nullptr};
+
+/* Trampolim executado dentro da task dedicada spawnada por px4_task_spawn_cmd.
+ * g_instance ja foi alocado e inicializado (init()) pela task que processou
+ * o comando "start" antes de spawnar essa task - so' falta rodar o loop
+ * principal (que abre o socket e fica nele) no contexto certo. */
+static int sensor_can_publisher_task_main(int argc, char *argv[])
+{
+	if (g_instance) {
+		g_instance->run_loop();
+	}
+
+	return 0;
+}
 
 extern "C" __EXPORT int sensor_can_publisher_main(int argc, char *argv[])
 {
@@ -799,21 +812,50 @@ extern "C" __EXPORT int sensor_can_publisher_main(int argc, char *argv[])
 				g_instance = nullptr;
 				return -1;
 			}
+
+			int task_id = px4_task_spawn_cmd("sensor_can_publisher",
+							  SCHED_DEFAULT,
+							  SCHED_PRIORITY_DEFAULT,
+							  2048,
+							  (px4_main_t)&sensor_can_publisher_task_main,
+							  nullptr);
+
+			if (task_id < 0) {
+				PX4_ERR("task spawn failed");
+				delete g_instance;
+				g_instance = nullptr;
+				return -1;
 			}
+		}
 
 
 		return 0;
 	}
-	if (!strcmp(argv[1], "udp_test")) {
 
-		if (!g_instance) {
-			PX4_ERR("module not running");
-			return -1;
-		}
+	if (!strcmp(argv[1], "send")) {
 
-		g_instance->udp_test();
-		return 0;
-		}
+	if (!g_instance) {
+		PX4_ERR("module not running");
+		return -1;
+	}
+
+	if (argc < 3) {
+		PX4_ERR("Usage: sensor_can_publisher send <msg>");
+		return -1;
+	}
+
+	return g_instance->send_manual(argv[2]);
+}
+
+if (!strcmp(argv[1], "messages")) {
+
+	if (!g_instance) {
+		PX4_ERR("module not running");
+		return -1;
+	}
+
+	return g_instance->print_messages();
+}
 
 	if (!strcmp(argv[1], "stop")) {
 		if (g_instance) {
@@ -832,7 +874,6 @@ extern "C" __EXPORT int sensor_can_publisher_main(int argc, char *argv[])
 		if (g_instance) {
 			PX4_INFO("sensor_can_publisher is running");
 			g_instance->print_status();
-			g_instance->print_udp_status();
 			PX4_INFO("Eu: %ld| Meu Score: %.3f | Lider Atual: %ld", (long)g_instance->get_my_id(), (double)g_instance->get_my_curr_score(), (long)g_instance->get_leader_id());
 		} else {
 			PX4_INFO("sensor_can_publisher is stopped");
