@@ -11,7 +11,7 @@
 #include <px4_platform_common/px4_work_queue/ScheduledWorkItem.hpp>
 #include <parameters/param.h>
 #include <drivers/drv_hrt.h>
-
+#include <errno.h>
 #include <uORB/uORB.h>
 #include <uORB/Subscription.hpp>
 #include <uORB/Publication.hpp>
@@ -33,6 +33,7 @@
 #include <inttypes.h>
 #include <time.h>
 #include <poll.h>
+#include <fcntl.h>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -111,20 +112,58 @@ public:
 
 		px4_sem_init(&peers_sem, 1, 1);
 
-		//_rx = new SensorCanRx(_my_id);
-		//_rx->init();
-		//if (!_rx) {
-		//	PX4_ERR("Failed to create RX");
-		//	return -1;
-		//}
-
 		PX4_INFO("sensor_can_publisher running");
 		//ScheduleOnInterval(20000); // já agenda aqui 👍
 		//ScheduleNow();
 		ScheduleOnInterval(10000); //diminui pra 10ms pra pegar mais rápido o líder
 
-
 		return 0;
+	}
+
+	void udp_test()
+	{
+	ekf_score_s msg{};
+	msg.timestamp = hrt_absolute_time();
+	msg.instance_id = _my_id;
+	msg.leader_id = _my_id;
+	PX4_INFO("TEST: this=%p sock=%d", this, _sock);
+
+	int type;
+	socklen_t len = sizeof(type);
+
+	int ret = getsockopt(
+	_sock,
+	SOL_SOCKET,
+	SO_TYPE,
+	&type,
+	&len
+	);
+
+	PX4_INFO("getsockopt ret=%d errno=%d type=%d",
+		ret,
+		errno,
+		type);
+
+	PX4_INFO("Sending UDP test packet...");
+	PX4_INFO("Socket FD: %d", _sock);
+	if (_sock < 0) {
+	PX4_ERR("INVALID SOCKET %d", _sock);
+	return;
+	}
+	 ret = sendto(_sock,
+				&msg,
+				sizeof(msg),
+				0,
+				(sockaddr *)&_broadcast_addr,
+				sizeof(_broadcast_addr));
+
+	if (ret < 0) {
+		PX4_ERR("sendto failed errno=%d", errno);
+
+	} else {
+		PX4_INFO("sendto OK (%d bytes)", (int)ret);
+	}
+
 	}
 
 	~SensorCanPublisher()
@@ -149,6 +188,58 @@ public:
 	//px4_sem_post(&_peers_sem);
 	}
 
+	void init_udp_socket()
+	{
+		PX4_INFO("INIT UDP SOCKET CALLED");
+		if (_socket_initialized) {
+			return;
+		}
+
+		_sock = socket(AF_INET, SOCK_DGRAM, 0);
+
+		if (_sock < 0) {
+			PX4_ERR("socket() failed errno=%d", errno);
+			return;
+		}
+
+		int broadcast = 1;
+
+		setsockopt(
+			_sock,
+			SOL_SOCKET,
+			SO_BROADCAST,
+			&broadcast,
+			sizeof(broadcast)
+		);
+
+
+		memset(&_broadcast_addr, 0, sizeof(_broadcast_addr));
+
+		_broadcast_addr.sin_family = AF_INET;
+		_broadcast_addr.sin_port = htons(14560);
+		_broadcast_addr.sin_addr.s_addr = inet_addr("192.168.0.255");
+
+		memset(&_local_addr, 0, sizeof(_local_addr));
+
+		_local_addr.sin_family = AF_INET;
+		_local_addr.sin_port = htons(14560);
+		_local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+		if (bind(_sock,
+		(struct sockaddr *)&_local_addr,
+		sizeof(_local_addr)) < 0) {
+
+		PX4_ERR("bind failed errno=%d", errno);
+		close(_sock);
+		_sock = -1;
+		return;
+		}
+
+		PX4_INFO("RUN UDP socket initialized fd=%d", _sock);
+
+		_socket_initialized = true;
+	}
+
 
 
 	void Run()
@@ -161,14 +252,20 @@ public:
 		}
 		EkfScore self{};
 
+		init_udp_socket();
+		if (!_socket_initialized) {
+			return;
+		}
 
 		update_uorb_subs();
 		montar_mensage(self);
 
-		update_local_peers();
+		receive_ekf_score_udp();
+		//update_local_peers();
 		remove_stale_peers();
-		update_leader_with_self(self);   // era: leader_id = elect_leader(self, leader_id);
+		update_leader_local(self);   // era: leader_id = elect_leader(self, leader_id);
 		publish_ekf_score_uorb(self);
+
 		_my_curr_score = self;
 		if (leader_id == self.instance_id) {
 			handle_leader_duties();
@@ -191,21 +288,133 @@ public:
 
 	}
 
+	void receive_ekf_score_udp()
+	{
+	while (true) {
+
+		ekf_score_s packet{};
+
+		sockaddr_in src_addr{};
+		socklen_t addrlen = sizeof(src_addr);
+
+		ssize_t ret = recvfrom(_sock,
+				&packet,
+				sizeof(packet),
+				0,
+				(sockaddr *)&src_addr,
+				&addrlen);
 
 
+
+		if (ret < 0) {
+
+		// não há mais pacotes
+		if (errno == EAGAIN || errno == EWOULDBLOCK) {
+			break;
+		}
+
+		_udp_rx_errors++;
+		PX4_WARN("recvfrom failed (%d)", errno);
+		break;
+		}
+
+		if ((size_t)ret != sizeof(packet)) {
+		_udp_bad_size++;
+		continue;
+		}
+
+		if (packet.instance_id == _my_id) {
+		_udp_self_packets++;
+		continue;
+		}
+
+		_udp_rx_count++;
+		_last_rx_time = hrt_absolute_time();
+		_last_rx_from = packet.instance_id;
+		uint64_t latency = _last_rx_time - packet.timestamp;
+
+		int idx = find_or_allocate_peer(packet.instance_id);
+
+		if (idx < 0) {
+		continue;
+		}
+
+		PeerState &peer = peers[idx];
+
+		peer.score = ekfScoreFromUorb(packet);
+		peer.last_rx = _last_rx_time;
+		peer.miss_count = 0;
+
+		if (latency < 10000000) {
+		peer.latency.update(latency);
+
+		} else {
+		peer.latency.lost_packages++;
+		}
+
+		maybe_update_leader(packet.instance_id,
+				peer.score);
+	}
+	}
+
+	void send_ekf_score_udp(const ekf_score_s &msg)
+	{
+	if (_sock < 0) {
+		PX4_WARN("socket invalid");
+		return;
+	}
+
+	ssize_t ret = sendto(_sock,
+				&msg,
+				sizeof(msg),
+				0,
+				(sockaddr *)&_broadcast_addr,
+				sizeof(_broadcast_addr));
+
+	if (ret < 0) {
+		PX4_WARN("sendto errno=%d", errno);
+
+	} else {
+		PX4_INFO("sendto %d bytes", (int)ret);
+
+		if ((size_t)ret == sizeof(msg)) {
+		_udp_tx_count++;
+		_last_tx_time = hrt_absolute_time();
+		}
+	}
+	}
+
+	void print_udp_status()
+	{
+	PX4_INFO("--------------- UDP ----------------");
+	PX4_INFO("TX packets      : %lu", _udp_tx_count);
+	PX4_INFO("RX packets      : %lu", _udp_rx_count);
+	PX4_INFO("RX errors       : %lu", _udp_rx_errors);
+	PX4_INFO("Bad size        : %lu", _udp_bad_size);
+	PX4_INFO("Self packets    : %lu", _udp_self_packets);
+	PX4_INFO("Leader          : %ld", leader_id);
+
+	if (_last_rx_time != 0) {
+		PX4_INFO("Last RX %.2f ms ago",
+			(double)(hrt_absolute_time() - _last_rx_time)/1000.0);
+	} else {
+		PX4_INFO("Never received");
+	}
+	}
 
 	void local_stop()
 	{
-		request_stop();
+	request_stop();
 
-		ScheduleClear();
-		usleep(20000);
-		px4_sem_destroy(&peers_sem);
+	if (_sock >= 0) {
+		close(_sock);
+		_sock = -1;
+		_socket_initialized = false;
+	}
 
-		//if (_rx) {
-		//	delete _rx;
-		//	_rx = nullptr;
-		//}
+	ScheduleClear();
+	usleep(20000);
+	px4_sem_destroy(&peers_sem);
 	}
 
 	void update_uorb_subs(){
@@ -250,7 +459,7 @@ public:
 		self.timestamp_utc = static_cast<uint64_t>(leader_id);//hrt_absolute_time();
 	}
 
-	void update_local_peers(){
+	/*void update_local_peers(){
 		for (int i = 0; i < MAX_EKF_INSTANCES; i++) {
 			if(_leader_publishable_info_subs[i].updated())
 			{
@@ -283,7 +492,7 @@ public:
 				}
 			}
 		}
-	}
+	}*/
 
 	// Só troca de líder quando chega um score NOVO melhor que o do líder atual.
 	// Se o score novo for do próprio líder, atualiza o valor de referência mesmo
@@ -371,6 +580,7 @@ public:
 
 		msg_ekfs.leader_id = leader_id;
 
+		send_ekf_score_udp(msg_ekfs);
 		_ekf_score_pub.publish(msg_ekfs);
 	}
 
@@ -431,13 +641,16 @@ public:
 		leader_score = best_score;
 	}
 
-	void update_leader_with_self(const EkfScore &self)
+	void update_leader_local(const EkfScore &self)
 	{
 		if (leader_id < 0 || _leader_lost) {
-			elect_leader_from_scratch(self);
+			if (active_peer_count() > 0) {
+				elect_leader_from_scratch(self);
+			}
 			_leader_lost = false;
 			return;
 		}
+
 
 		float self_score = compute_score(self);
 
@@ -485,14 +698,31 @@ private:
 	int _count{0};
 
 	int32_t _my_id{-1};
-	static constexpr uint64_t PEER_TIMEOUT_US = 100000; // 100 ms
+	static constexpr uint64_t PEER_TIMEOUT_US = 200000; // 100 ms
 
 
+	/* ETHERNET */
+	int _sock{-1};
+	sockaddr_in _local_addr{};
+	sockaddr_in _broadcast_addr{};
+	bool _socket_initialized{false};
+	uint32_t _udp_tx_count{0};
+	uint32_t _udp_rx_count{0};
+	uint32_t _udp_rx_errors{0};
+	uint32_t _udp_bad_size{0};
+	uint32_t _udp_self_packets{0};
+
+	int _last_rx_time{0};
+	int _last_tx_time{0};
+
+	uint8_t _last_rx_from{255};
+
+
+	/* uORB */
 	SensorCanRx *_rx{nullptr};
 	ekf_score_s rx{};
 	leader_publishable_info_s msg_lpi{};
 	ekf_score_s msg_ekfs{};
-	/* uORB */
 	uORB::Subscription _est_sub{ORB_ID(estimator_status)};
 	uORB::Subscription _veh_sub{ORB_ID(vehicle_status)};
 	uORB::Subscription _lpos_sub{ORB_ID(vehicle_local_position)};
@@ -523,16 +753,6 @@ private:
 	bool _leader_lost{false};
 	static constexpr int MAX_EKF_INSTANCES = 4;
 
-	uORB::Subscription _ekf_score_subs[MAX_EKF_INSTANCES] = {
-	uORB::Subscription(ORB_ID(ekf_score), 0),
-	uORB::Subscription(ORB_ID(ekf_score), 1),
-	uORB::Subscription(ORB_ID(ekf_score), 2),
-	};
-	uORB::Subscription _leader_publishable_info_subs[MAX_EKF_INSTANCES] = {
-	uORB::Subscription(ORB_ID(leader_publishable_info), 0),
-	uORB::Subscription(ORB_ID(leader_publishable_info), 1),
-	uORB::Subscription(ORB_ID(leader_publishable_info), 2),
-	};
 
 
 };
@@ -584,6 +804,16 @@ extern "C" __EXPORT int sensor_can_publisher_main(int argc, char *argv[])
 
 		return 0;
 	}
+	if (!strcmp(argv[1], "udp_test")) {
+
+		if (!g_instance) {
+			PX4_ERR("module not running");
+			return -1;
+		}
+
+		g_instance->udp_test();
+		return 0;
+		}
 
 	if (!strcmp(argv[1], "stop")) {
 		if (g_instance) {
@@ -602,6 +832,7 @@ extern "C" __EXPORT int sensor_can_publisher_main(int argc, char *argv[])
 		if (g_instance) {
 			PX4_INFO("sensor_can_publisher is running");
 			g_instance->print_status();
+			g_instance->print_udp_status();
 			PX4_INFO("Eu: %ld| Meu Score: %.3f | Lider Atual: %ld", (long)g_instance->get_my_id(), (double)g_instance->get_my_curr_score(), (long)g_instance->get_leader_id());
 		} else {
 			PX4_INFO("sensor_can_publisher is stopped");
