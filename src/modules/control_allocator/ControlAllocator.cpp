@@ -63,6 +63,7 @@ ControlAllocator::ControlAllocator() :
 
 	param_get(param_find("SYS_PX4_COMM_ID"), &_my_id);
 	_my_id = _my_id%256; // limit to 255, as we use uint8_t for the ID in leader_publishable_info
+	_ekf_score.leader_id = -1;   // sentinel: sem dado real ainda, não pode ser líder
 
 
 	for (int i = 0; i < MAX_NUM_MOTORS; ++i) {
@@ -446,18 +447,13 @@ ControlAllocator::Run()
 		}
 	}
 
-	// Publish actuator setpoint and allocator status
-	static int32_t current_leader_id = -1;
 
-	for (int i = 0; i < 3; i++) { // 3 = MAX_NUM_INSTANCES of leader_publishable_info
-		if(_leader_publishable_info_subs[i].updated())
-		{
-			_leader_publishable_info_subs[i].copy(&_leader_publishable_info);
-			current_leader_id = _leader_publishable_info.instance_id;
-		}
+	if (_ekf_score_sub.updated()) {
+	_ekf_score_sub.copy(&_ekf_score);
 	}
-	if(current_leader_id == _my_id){
-		publish_actuator_controls();
+
+	if (_ekf_score.leader_id == _my_id) {
+	publish_actuator_controls();
 	}
 
 

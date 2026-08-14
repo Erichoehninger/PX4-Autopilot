@@ -63,19 +63,26 @@ struct LatencyStats {
 		samples++;
 	}
 
+	// NOTA: "latency" aqui e' o intervalo LOCAL entre atualizacoes consecutivas
+	// de um peer (medido com o relogio desta propria placa), nao a latencia de
+	// propagacao de rede entre as duas placas - isso exigiria relogios
+	// sincronizados (PTP/NTP) ou um protocolo de ida-e-volta (RTT), que nao
+	// temos. Ver comentario em process_incoming_ekf_score() no .cpp.
 	void print(int32_t peer_id) const
 	{
 		if (samples == 0) {
-			PX4_INFO("Peer %ld: no latency samples collected", (long)peer_id);
+			PX4_INFO("Peer %ld: no update-interval samples collected", (long)peer_id);
 			return;
 		}
 
+		double avg_us = static_cast<double>(sum_us) / static_cast<double>(samples);
+
 		PX4_INFO(
-			"Peer %ld latency [us] | min=%" PRIu64 " avg=%" PRIu64 " max=%" PRIu64 " samples=%lu",
+			"Peer %ld update interval [ms] | min=%.3f avg=%.3f max=%.3f samples=%lu",
 			(long)peer_id,
-			min_us,
-			sum_us / samples,
-			max_us,
+			(double)min_us / 1000.0,
+			avg_us / 1000.0,
+			(double)max_us / 1000.0,
 			(unsigned long)samples
 		);
 		PX4_INFO(
@@ -138,6 +145,19 @@ inline bool is_valid_peer(const EkfScore &s, uint64_t now)
 	// if (s.nav_state != vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION) return false;
 
 	return true;
+}
+
+inline int active_peer_count()
+{
+	int count = 0;
+
+	for (int i = 0; i < MAX_PEERS; i++) {
+		if (peer_ids[i] >= 0) {
+			count++;
+		}
+	}
+
+	return count;
 }
 
 inline float compute_score(const EkfScore &s)

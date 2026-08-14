@@ -90,6 +90,7 @@
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/failure_detector_status.h>
 #include <uORB/topics/leader_publishable_info.h>
+#include <uORB/topics/ekf_score.h>
 
 class ControlAllocator : public ModuleBase<ControlAllocator>, public ModuleParams, public px4::ScheduledWorkItem
 {
@@ -204,15 +205,10 @@ private:
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
 	uORB::Subscription _vehicle_control_mode_sub{ORB_ID(vehicle_control_mode)};
 	uORB::Subscription _failure_detector_status_sub{ORB_ID(failure_detector_status)};
-	uORB::Subscription _leader_publishable_info_sub{ORB_ID(leader_publishable_info)};
-	leader_publishable_info_s _leader_publishable_info{};
-	uORB::Subscription _leader_publishable_info_subs[3] = {
-	uORB::Subscription(ORB_ID(leader_publishable_info), 0),
-	uORB::Subscription(ORB_ID(leader_publishable_info), 1),
-	uORB::Subscription(ORB_ID(leader_publishable_info), 2),};
+	uORB::Subscription _ekf_score_sub{ORB_ID(ekf_score)};
+	ekf_score_s _ekf_score{};
 
 
-	int32_t _leader_id;
 	int32_t _my_id;
 
 	matrix::Vector3f _torque_sp;

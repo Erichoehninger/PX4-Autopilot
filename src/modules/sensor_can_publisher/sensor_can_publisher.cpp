@@ -51,11 +51,17 @@
 #define MAX_RX_HISTORY 10
 #define MAX_MSG_SIZE 128
 
+enum : uint8_t {
+	ETH_MSG_TEXT      = 0, // mensagem de texto livre (heartbeat/debug/"send" manual)
+	ETH_MSG_EKF_SCORE = 1, // payload binario com EkfScore (usado pra eleicao de lider)
+};
+
 struct EthernetMessage
 {
 	uint32_t sender_id;
 	uint32_t counter;
 	uint64_t timestamp;
+	uint8_t  msg_type{ETH_MSG_TEXT};
 	char data[MAX_MSG_SIZE];
 };
 orb_advert_t _mavlink_log_pub{nullptr};
@@ -169,6 +175,18 @@ public:
 			   &enable,
 			   sizeof(enable));
 
+	// Aumenta o buffer de envio do socket. Com o ritmo de broadcast do
+	// nosso loop (originalmente 100Hz), o buffer padrao pode ser pequeno
+	// demais e a fila de TX do driver ethernet enche rapido, gerando
+	// EAGAIN. Isso da' mais folga - nao resolve throughput do driver em si,
+	// mas ajuda a absorver picos.
+	int sndbuf = 32768;
+	setsockopt(_sock,
+			   SOL_SOCKET,
+			   SO_SNDBUF,
+			   &sndbuf,
+			   sizeof(sndbuf));
+
 	struct sockaddr_in local{};
 
 	local.sin_family = AF_INET;
@@ -198,6 +216,20 @@ public:
 	return 0;
 }
 
+// Grava uma copia do pacote enviado com sucesso no historico de TX, pra
+// "sensor_can_publisher messages" poder mostrar tudo que foi mandado, nao
+// so' o que foi recebido.
+void record_tx_history(const EthernetMessage &packet)
+{
+	_tx_history[_tx_history_index] = packet;
+
+	_tx_history_index++;
+
+	if (_tx_history_index >= MAX_RX_HISTORY) {
+		_tx_history_index = 0;
+	}
+}
+
 void send_broadcast(const char *msg)
 {
 	if (_sock < 0) {
@@ -210,6 +242,7 @@ void send_broadcast(const char *msg)
 	packet.sender_id = _my_id;
 	packet.counter = _tx_count;
 	packet.timestamp = hrt_absolute_time();
+	packet.msg_type = ETH_MSG_TEXT;
 
 	strncpy(packet.data,
 			msg,
@@ -227,6 +260,44 @@ void send_broadcast(const char *msg)
 	// So conta como TX real se o sendto realmente teve sucesso.
 	if (ret >= 0) {
 		_tx_count++;
+		record_tx_history(packet);
+	}
+}
+
+// Manda o EkfScore local via broadcast UDP. Isso substitui a troca de score
+// que antes vinha via CAN bus (uORB ekf_score alimentado por sensor_can_rx) -
+// agora a eleicao de lider inteira roda por cima da Ethernet.
+void send_ekf_score_broadcast(const EkfScore &score)
+{
+	static_assert(sizeof(EkfScore) <= MAX_MSG_SIZE,
+		      "EkfScore nao cabe no payload do EthernetMessage");
+
+	if (_sock < 0) {
+		return;
+	}
+
+	EthernetMessage packet{};
+
+	packet.sender_id = _my_id;
+	packet.counter = _tx_count;
+	packet.timestamp = hrt_absolute_time(); // usado pelo peer pra calcular latencia
+	packet.msg_type = ETH_MSG_EKF_SCORE;
+
+	memcpy(packet.data, &score, sizeof(EkfScore));
+
+	int ret = sendto(_sock,
+			  &packet,
+			  sizeof(packet),
+			  0,
+			  (sockaddr *)&_broadcast_addr,
+			  sizeof(_broadcast_addr));
+
+	if (ret >= 0) {
+		_tx_count++;
+		record_tx_history(packet);
+
+	} else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+		PX4_WARN("sendto ekf_score falhou, sock=%d errno=%d", _sock, errno);
 	}
 }
 
@@ -257,12 +328,6 @@ void receive_messages()
 			break;
 		}
 
-		PX4_INFO("RX from %s id=%u cnt=%u msg=%s",
-         inet_ntoa(src.sin_addr),
-         (unsigned)packet.sender_id,
-         (unsigned)packet.counter,
-         packet.data);
-
 		_rx_count++;
 
 		_history[_history_index] = packet;
@@ -271,6 +336,26 @@ void receive_messages()
 
 		if (_history_index >= MAX_RX_HISTORY) {
 			_history_index = 0;
+		}
+
+		if (packet.sender_id == static_cast<uint32_t>(_my_id)) {
+			// eco do proprio broadcast (a placa recebe o que ela mesma
+			// manda). Ja contamos em _rx_count acima pra fins de debug,
+			// mas nao processa como se fosse peer nem alimenta eleicao.
+			continue;
+		}
+
+		if (packet.msg_type == ETH_MSG_EKF_SCORE) {
+			EkfScore remote_score{};
+			memcpy(&remote_score, packet.data, sizeof(EkfScore));
+			process_incoming_ekf_score(packet.sender_id, remote_score, packet.timestamp);
+
+		} else {
+			PX4_INFO("RX from %s id=%u cnt=%u msg=%s",
+			 inet_ntoa(src.sin_addr),
+			 (unsigned)packet.sender_id,
+			 (unsigned)packet.counter,
+			 packet.data);
 		}
 	}
 }
@@ -283,7 +368,7 @@ void receive_messages()
 		int32_t id = peer_ids[i];
 		peers[i].latency.print(id);
 		float score = compute_score(peers[i].score);
-		PX4_INFO("Score: %.3f", (double)score);
+		PX4_INFO("Peer %ld Score: %.3f", (long)id, (double)score);
 	}
 	return 0;
 	//px4_sem_post(&_peers_sem);
@@ -319,16 +404,20 @@ void receive_messages()
 				send_broadcast(local_copy);
 			}
 
-			send_broadcast("heartbeat");
-
-			receive_messages();
-
 			EkfScore self{};
 
 			update_uorb_subs();
 			montar_mensage(self);
 
-			update_local_peers();
+			// Eleicao de lider inteira via Ethernet: manda o proprio score
+			// em broadcast, e recebe/processa o score dos peers dentro de
+			// receive_messages() (que ja chama process_incoming_ekf_score
+			// e maybe_update_leader() pra cada pacote ETH_MSG_EKF_SCORE).
+			// Isso substitui o fluxo antigo, que vinha via CAN bus -> uORB.
+			send_ekf_score_broadcast(self);
+
+			receive_messages();
+
 			remove_stale_peers();
 			update_leader_with_self(self);   // era: leader_id = elect_leader(self, leader_id);
 			publish_ekf_score_uorb(self);
@@ -342,7 +431,12 @@ void receive_messages()
 
 			perf_end(_loop_perf);
 
-			usleep(10000); // 10ms, equivalente ao antigo ScheduleOnInterval
+			usleep(20000); // 20ms (50Hz), 50ms (20Hz) - reduzido de 10ms (100Hz).
+			// O ping de broadcast a 1Hz nao deu erro de sendto, mas a 100Hz
+			// o driver ethernet dessa placa nao dava conta (EAGAIN
+			// constante). 20Hz e' um ponto de partida mais seguro; se a
+			// eleicao de lider aguentar esse ritmo, pode tentar baixar de
+			// novo aos poucos (ex: 20ms/50Hz) e observar se o EAGAIN volta.
 		}
 
 		PX4_INFO("run_loop encerrando");
@@ -440,38 +534,52 @@ void receive_messages()
 		self.timestamp_utc = static_cast<uint64_t>(leader_id);//hrt_absolute_time();
 	}
 
-	void update_local_peers(){
-		for (int i = 0; i < MAX_EKF_INSTANCES; i++) {
-			if(_leader_publishable_info_subs[i].updated())
-			{
-				_leader_publishable_info_subs[i].copy(&leader_info);
-			}
-			if (_ekf_score_subs[i].updated())
-			{
-				if (_ekf_score_subs[i].copy(&rx)) {
+	// Chamado a partir de receive_messages() pra cada pacote ETH_MSG_EKF_SCORE
+	// recebido via broadcast Ethernet. Substitui o antigo update_local_peers(),
+	// que lia essa mesma informacao de topicos uORB alimentados via CAN bus.
+	//
+	// NOTA IMPORTANTE sobre a metrica "latency": nao da' pra medir latencia de
+	// rede de verdade comparando send_timestamp (relogio hrt da placa REMOTA)
+	// com rx_time (relogio hrt desta placa) - cada PX4 conta hrt_absolute_time()
+	// a partir do proprio boot, sem nenhuma sincronizacao entre placas (sem
+	// PTP/NTP). Por isso essa conta usa APENAS o relogio local: mede o
+	// intervalo entre duas atualizacoes consecutivas vindas do mesmo peer, o
+	// que e' uma medida valida de "frescor"/regularidade dos dados (deveria
+	// ficar perto do periodo do loop, ~50ms, se nao tiver perda). Nao e'
+	// latencia de propagacao de rede - pra isso precisaria de um protocolo
+	// de ida-e-volta (RTT/2), que nao temos implementado ainda.
+	void process_incoming_ekf_score(int32_t sender_id, const EkfScore &remote_score, uint64_t send_timestamp)
+	{
+		(void)send_timestamp; // nao usavel sem sincronizacao de relogio entre placas
 
-					if (rx.instance_id == _my_id) {
-						continue;
-					}
-					uint64_t rx_time = hrt_absolute_time();
-					uint64_t latency = rx_time - rx.timestamp;
-					int idx = find_or_allocate_peer(rx.instance_id);
-					if (idx >= 0) {
-						PeerState &peer = peers[idx];
-						peer.score   = ekfScoreFromUorb(rx);
-						peer.last_rx = rx_time;
+		uint64_t rx_time = hrt_absolute_time();
 
-						if (latency < 10000000) {
-							peer.latency.update(latency);
-						} else {
-							peer.latency.lost_packages++;
-						}
+		int idx = find_or_allocate_peer(sender_id);
 
-						maybe_update_leader(rx.instance_id, peer.score);
-					}
-				}
+		if (idx < 0) {
+			// tabela de peers cheia (MAX_PEERS atingido)
+			return;
+		}
+
+		PeerState &peer = peers[idx];
+		bool has_previous_sample = (peer.last_rx != 0);
+		uint64_t previous_rx = peer.last_rx;
+
+		peer.score   = remote_score;
+		peer.last_rx = rx_time;
+
+		if (has_previous_sample) {
+			uint64_t interval = rx_time - previous_rx; // intervalo local entre atualizacoes
+
+			if (interval < 10000000) {
+				peer.latency.update(interval);
+
+			} else {
+				peer.latency.lost_packages++;
 			}
 		}
+
+		maybe_update_leader(sender_id, peer.score);
 	}
 
 	// Só troca de líder quando chega um score NOVO melhor que o do líder atual.
@@ -661,12 +769,48 @@ void receive_messages()
 
 	_actuator_test_pub.publish(msg);
 }
+// Helper reutilizado por print_messages() pra imprimir uma entrada de
+// historico (RX ou TX), decodificando o payload certo conforme o msg_type.
+static void print_history_entry(int idx, const EthernetMessage &m)
+{
+	if (m.msg_type == ETH_MSG_EKF_SCORE) {
+		EkfScore s{};
+		memcpy(&s, m.data, sizeof(EkfScore));
+
+		PX4_INFO("[%d] id=%u cnt=%u ekf_score inst=%ld score=%.3f",
+				 idx,
+				 static_cast<unsigned>(m.sender_id),
+				 static_cast<unsigned>(m.counter),
+				 (long)s.instance_id,
+				 (double)compute_score(s));
+
+	} else {
+		PX4_INFO("[%d] id=%u cnt=%u msg=%s",
+				 idx,
+				 static_cast<unsigned>(m.sender_id),
+				 static_cast<unsigned>(m.counter),
+				 m.data);
+	}
+}
+
 int print_messages()
 {
 	PX4_INFO("TX=%u RX=%u",
          static_cast<unsigned>(_tx_count),
          static_cast<unsigned>(_rx_count));
 
+	PX4_INFO("--- enviado (TX) ---");
+	for (int i = 0; i < MAX_RX_HISTORY; i++) {
+		const EthernetMessage &m = _tx_history[i];
+
+		if (m.timestamp == 0) {
+			continue;
+		}
+
+		print_history_entry(i, m);
+	}
+
+	PX4_INFO("--- recebido (RX) ---");
 	for (int i = 0; i < MAX_RX_HISTORY; i++) {
 
 		const EthernetMessage &m = _history[i];
@@ -675,11 +819,7 @@ int print_messages()
 			continue;
 		}
 
-		PX4_INFO("[%d] id=%u cnt=%u msg=%s",
-				 i,
-				 static_cast<unsigned>(m.sender_id),
-				 static_cast<unsigned>(m.counter),
-				 m.data);
+		print_history_entry(i, m);
 	}
 
 	return 0;
@@ -694,7 +834,6 @@ private:
 
 
 	SensorCanRx *_rx{nullptr};
-	ekf_score_s rx{};
 	leader_publishable_info_s msg_lpi{};
 	ekf_score_s msg_ekfs{};
 	/* uORB */
@@ -736,22 +875,21 @@ private:
 
 	static constexpr int MAX_EKF_INSTANCES = 3;
 
-	uORB::Subscription _ekf_score_subs[MAX_EKF_INSTANCES] = {
-	uORB::Subscription(ORB_ID(ekf_score), 0),
-	uORB::Subscription(ORB_ID(ekf_score), 1),
-	uORB::Subscription(ORB_ID(ekf_score), 2),
-	};
-	uORB::Subscription _leader_publishable_info_subs[MAX_EKF_INSTANCES] = {
-	uORB::Subscription(ORB_ID(leader_publishable_info), 0),
-	uORB::Subscription(ORB_ID(leader_publishable_info), 1),
-	uORB::Subscription(ORB_ID(leader_publishable_info), 2),
-	};
+	// NOTA: as subscriptions uORB multi-instancia (_ekf_score_subs /
+	// _leader_publishable_info_subs) que existiam aqui foram removidas.
+	// Elas alimentavam a eleicao de lider com dados vindos via CAN bus
+	// (sensor_can_rx). Agora o score dos peers chega via broadcast
+	// Ethernet e e' processado em process_incoming_ekf_score(), chamado
+	// de dentro de receive_messages().
 
 	int _sock{-1};
 	uint32_t _tx_count{0};
 	uint32_t _rx_count{0};
 	EthernetMessage _history[MAX_RX_HISTORY]{};
 	int _history_index{0};
+
+	EthernetMessage _tx_history[MAX_RX_HISTORY]{};
+	int _tx_history_index{0};
 	struct sockaddr_in _broadcast_addr{};
 
 
